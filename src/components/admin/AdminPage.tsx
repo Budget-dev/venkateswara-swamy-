@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import 'bootstrap/dist/css/bootstrap.min.css';
 import { useApp } from '../../context/AppContext';
 import {
   collection,
@@ -11,68 +10,75 @@ import {
   onSnapshot,
   query,
   orderBy,
-  limit,
-  runTransaction
+  limit
 } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
-import { CounterLocation, QueueLine, QueueAlert, UserQueueReport, CrowdLevel, ProbabilityLevel } from '../../types';
-import { calculateLineMetrics } from '../../hooks/useFirebase';
+import { CounterLocation, QueueLine, QueueAlert, UserQueueReport } from '../../types';
+import {
+  ShieldAlert,
+  Sliders,
+  Users,
+  Activity,
+  AlertTriangle,
+  ArrowLeft,
+  Building2,
+  Radio,
+  Plus,
+  Trash2,
+  RefreshCw,
+  CheckCircle2,
+  Clock,
+  MapPin,
+  Send,
+  Eye,
+  Settings,
+  Flame,
+  Check,
+  X,
+  Layers,
+  Sparkles,
+  Search,
+  ExternalLink,
+  ChevronRight,
+  Info
+} from 'lucide-react';
 
 export const AdminPage: React.FC = () => {
-  const { setCurrentView, submitReport, adminSetLineVotes, adminAdjustLineVotes, adminBatchUpdateLines } = useApp();
-  
+  const { setCurrentView } = useApp();
   const [locations, setLocations] = useState<CounterLocation[]>([]);
   const [alerts, setAlerts] = useState<QueueAlert[]>([]);
   const [allReports, setAllReports] = useState<UserQueueReport[]>([]);
-  const [activeTab, setActiveTab] = useState<'voting' | 'locations' | 'reports' | 'broadcasts'>('voting');
+  const [activeTab, setActiveTab] = useState<'overview' | 'counters' | 'queues' | 'broadcasts' | 'reports' | 'system'>('overview');
   
-  const [selectedLocId, setSelectedLocId] = useState<string>('vishnu-nivasam');
-  const [toastMessage, setToastMessage] = useState<{ text: string; variant: 'success' | 'info' | 'danger' | 'warning' } | null>(null);
+  const [selectedLocId, setSelectedLocId] = useState<string>('');
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
   
-  // Local state for inline vote edits (maps queueId -> current input value)
-  const [editingVotes, setEditingVotes] = useState<Record<string, number>>({});
-  const [savingQueueId, setSavingQueueId] = useState<string | null>(null);
-  const [isSimulatingVote, setIsSimulatingVote] = useState<string | null>(null);
-
-  // Admin Auth PIN
+  // Auth state for admin
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => {
     return sessionStorage.getItem('tq_admin_auth') === 'true';
   });
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState(false);
 
-  // Modal: Edit Full Line
-  const [editLineModalQueue, setEditLineModalQueue] = useState<{ locId: string; queue: QueueLine } | null>(null);
-  const [modalLineName, setModalLineName] = useState('');
-  const [modalLineToken, setModalLineToken] = useState('');
-  const [modalLineVotes, setModalLineVotes] = useState<number>(0);
-  const [modalLineProb, setModalLineProb] = useState<number>(85);
-  const [modalLineWait, setModalLineWait] = useState<number>(20);
-  const [modalLineActive, setModalLineActive] = useState<boolean>(true);
-  const [modalLineCrowd, setModalLineCrowd] = useState<CrowdLevel>('Low');
-
-  // Modal: Add New Line
-  const [showAddLineModal, setShowAddLineModal] = useState(false);
-  const [newLineName, setNewLineName] = useState('');
-  const [newLineToken, setNewLineToken] = useState('General SSD Token');
-  const [newLineInitialVotes, setNewLineInitialVotes] = useState(0);
-
-  // Modal: Add Location
-  const [showAddLocModal, setShowAddLocModal] = useState(false);
+  // New location modal state
+  const [showAddLocationModal, setShowAddLocationModal] = useState(false);
   const [newLocName, setNewLocName] = useState('');
   const [newLocAddress, setNewLocAddress] = useState('');
   const [newLocLandmark, setNewLocLandmark] = useState('');
   const [newLocHours, setNewLocHours] = useState('05:00 AM - 08:00 PM');
+  const [newLocLat, setNewLocLat] = useState('13.6288');
+  const [newLocLng, setNewLocLng] = useState('79.4192');
 
-  // Broadcast Form
+  // Broadcast modal state
   const [broadcastTitle, setBroadcastTitle] = useState('');
   const [broadcastMessage, setBroadcastMessage] = useState('');
   const [broadcastSeverity, setBroadcastSeverity] = useState<'info' | 'success' | 'warning' | 'alert'>('warning');
-  const [broadcastTargetLoc, setBroadcastTargetLoc] = useState('all');
+  const [broadcastLocId, setBroadcastLocId] = useState('all');
 
-  // Live Firestore Listeners
+  // Live Firestore listeners
   useEffect(() => {
-    // 1. Locations
+    // 1. Locations listener
     const unsubLocs = onSnapshot(collection(db, 'locations'), (snapshot) => {
       const locs: CounterLocation[] = [];
       snapshot.forEach((d) => {
@@ -80,14 +86,12 @@ export const AdminPage: React.FC = () => {
         locs.push({ ...data, id: data.id || d.id });
       });
       setLocations(locs);
-      
-      // Keep selectedLocId valid
-      if (locs.length > 0 && (!selectedLocId || !locs.some(l => l.id === selectedLocId))) {
+      if (!selectedLocId && locs.length > 0) {
         setSelectedLocId(locs[0].id);
       }
     });
 
-    // 2. Alerts
+    // 2. Alerts listener
     const unsubAlerts = onSnapshot(collection(db, 'alerts'), (snapshot) => {
       const arr: QueueAlert[] = [];
       snapshot.forEach((d) => {
@@ -98,20 +102,20 @@ export const AdminPage: React.FC = () => {
       setAlerts(arr);
     });
 
-    // 3. Devotee Reports
-    const qReports = query(collection(db, 'reports'), orderBy('timestamp', 'desc'), limit(50));
-    const unsubReports = onSnapshot(qReports, (snapshot) => {
+    // 3. Live community reports listener (latest 50)
+    const reportsQuery = query(collection(db, 'reports'), orderBy('timestamp', 'desc'), limit(50));
+    const unsubReports = onSnapshot(reportsQuery, (snapshot) => {
       const list: UserQueueReport[] = [];
       snapshot.forEach((d) => {
         const data = d.data() as UserQueueReport;
         list.push({ ...data, id: data.id || d.id });
       });
       setAllReports(list);
-    }, () => {
-      // Fallback
-      const unsubFallback = onSnapshot(collection(db, 'reports'), (snap) => {
+    }, (err) => {
+      // Fallback if index on timestamp is generating
+      const unsubFallback = onSnapshot(collection(db, 'reports'), (snapshot) => {
         const list: UserQueueReport[] = [];
-        snap.forEach((d) => {
+        snapshot.forEach((d) => {
           const data = d.data() as UserQueueReport;
           list.push({ ...data, id: data.id || d.id });
         });
@@ -125,300 +129,209 @@ export const AdminPage: React.FC = () => {
       unsubAlerts();
       unsubReports();
     };
-  }, [selectedLocId]);
+  }, []);
 
-  const showToast = (text: string, variant: 'success' | 'info' | 'danger' | 'warning' = 'success') => {
-    setToastMessage({ text, variant });
-    setTimeout(() => setToastMessage(null), 4000);
+  const showToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 3500);
   };
 
   const handlePinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    // Default admin PIN is 1210 or admin (or any PIN >= 4 chars for test/demo ease)
     if (pinInput === '1210' || pinInput === 'admin' || pinInput === '8888') {
       setIsAdminAuthenticated(true);
       sessionStorage.setItem('tq_admin_auth', 'true');
       setPinError(false);
-      showToast('Admin access granted successfully', 'success');
+      showToast('Admin access granted', 'success');
     } else {
       setPinError(true);
     }
   };
 
-  const handleLogout = () => {
-    setIsAdminAuthenticated(false);
-    sessionStorage.removeItem('tq_admin_auth');
-    setPinInput('');
-  };
+  const activeLoc = locations.find((l) => l.id === selectedLocId) || locations[0];
 
-  const currentLoc = locations.find((l) => l.id === selectedLocId) || locations[0];
-
-  // Sync editingVotes state with Firestore values whenever currentLoc changes
-  useEffect(() => {
-    if (currentLoc && currentLoc.queues) {
-      const initialMap: Record<string, number> = {};
-      currentLoc.queues.forEach((q) => {
-        initialMap[q.id] = q.activeReportsCount || 0;
-      });
-      setEditingVotes(initialMap);
-    }
-  }, [currentLoc?.id, currentLoc?.queues]);
-
-  // Handle inline vote number change
-  const handleVoteInputChange = (queueId: string, value: string) => {
-    const num = parseInt(value, 10);
-    setEditingVotes((prev) => ({
-      ...prev,
-      [queueId]: isNaN(num) ? 0 : Math.max(0, num)
-    }));
-  };
-
-  // Handle Save specific line voting number
-  const handleSaveLineVotes = async (queueId: string) => {
-    if (!currentLoc) return;
-    const newVotes = editingVotes[queueId] !== undefined ? editingVotes[queueId] : 0;
-    setSavingQueueId(queueId);
-    try {
-      await adminSetLineVotes(currentLoc.id, queueId, newVotes);
-      showToast(`Line vote count updated to ${newVotes}. New devotee votes will count continuously from this number!`, 'success');
-    } catch (err: any) {
-      showToast(`Failed to update vote number: ${err?.message || 'Unknown error'}`, 'danger');
-    } finally {
-      setSavingQueueId(null);
-    }
-  };
-
-  // Handle Quick +/- Delta adjustment
-  const handleQuickAdjustVotes = async (queueId: string, delta: number) => {
-    if (!currentLoc) return;
-    setSavingQueueId(queueId);
-    try {
-      await adminAdjustLineVotes(currentLoc.id, queueId, delta);
-      const queue = currentLoc.queues?.find(q => q.id === queueId);
-      const currentVal = queue?.activeReportsCount || 0;
-      const targetVal = Math.max(0, currentVal + delta);
-      setEditingVotes(prev => ({ ...prev, [queueId]: targetVal }));
-      showToast(`Adjusted votes by ${delta > 0 ? `+${delta}` : delta} (New count: ${targetVal})`, 'info');
-    } catch (err: any) {
-      showToast(`Failed to adjust votes: ${err?.message || 'Unknown error'}`, 'danger');
-    } finally {
-      setSavingQueueId(null);
-    }
-  };
-
-  // Handle Batch Save All Lines for current location
-  const handleBatchSaveAllLines = async () => {
-    if (!currentLoc || !currentLoc.queues) return;
-    try {
-      const updates = currentLoc.queues.map((q) => ({
-        id: q.id,
-        activeReportsCount: editingVotes[q.id] !== undefined ? editingVotes[q.id] : (q.activeReportsCount || 0)
-      }));
-      await adminBatchUpdateLines(currentLoc.id, updates);
-      showToast(`Successfully updated all voting numbers for ${currentLoc.name}`, 'success');
-    } catch (err: any) {
-      showToast(`Failed to batch update lines: ${err?.message || 'Unknown error'}`, 'danger');
-    }
-  };
-
-  // Simulate Devotee Vote (+1) to verify live increment
-  const handleSimulateDevoteeVote = async (queueId: string) => {
-    if (!currentLoc) return;
-    setIsSimulatingVote(queueId);
-    try {
-      await submitReport(currentLoc.id, queueId, 1);
-      showToast(`Simulated 1 user vote on line! Count incremented live from baseline.`, 'success');
-    } catch (err: any) {
-      showToast(`Simulation failed: ${err?.message || 'Error'}`, 'danger');
-    } finally {
-      setIsSimulatingVote(null);
-    }
-  };
-
-  // Toggle Line Active status
-  const handleToggleLineActive = async (queue: QueueLine) => {
-    if (!currentLoc) return;
-    try {
-      await adminSetLineVotes(currentLoc.id, queue.id, queue.activeReportsCount || 0, {
-        isActive: !queue.isActive
-      });
-      showToast(`Line ${queue.name} marked as ${!queue.isActive ? 'Active' : 'Closed'}`, 'info');
-    } catch (err: any) {
-      showToast(`Error toggling status: ${err?.message || 'Error'}`, 'danger');
-    }
-  };
-
-  // Open Full Line Edit Modal
-  const handleOpenEditLineModal = (queue: QueueLine) => {
-    if (!currentLoc) return;
-    setEditLineModalQueue({ locId: currentLoc.id, queue });
-    setModalLineName(queue.name);
-    setModalLineToken(queue.tokenSlotType || 'General SSD Token');
-    setModalLineVotes(queue.activeReportsCount || 0);
-    setModalLineProb(queue.estimatedProbability || 80);
-    setModalLineWait(queue.estimatedWaitMinutes || 20);
-    setModalLineActive(queue.isActive);
-    setModalLineCrowd(queue.crowdLevel || 'Low');
-  };
-
-  // Save Full Line Modal
-  const handleSaveModalLine = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editLineModalQueue) return;
-    try {
-      await adminSetLineVotes(editLineModalQueue.locId, editLineModalQueue.queue.id, modalLineVotes, {
-        name: modalLineName,
-        tokenSlotType: modalLineToken,
-        isActive: modalLineActive,
-        estimatedProbability: modalLineProb,
-        estimatedWaitMinutes: modalLineWait,
-        crowdLevel: modalLineCrowd
-      });
-      showToast(`Line "${modalLineName}" updated successfully`, 'success');
-      setEditLineModalQueue(null);
-    } catch (err: any) {
-      showToast(`Failed to save line: ${err?.message || 'Error'}`, 'danger');
-    }
-  };
-
-  // Delete Line
-  const handleDeleteLine = async (queueId: string) => {
-    if (!currentLoc || !confirm('Are you sure you want to delete this queue line?')) return;
-    try {
-      const locRef = doc(db, 'locations', currentLoc.id);
-      const remainingQueues = (currentLoc.queues || []).filter(q => q.id !== queueId);
-      await updateDoc(locRef, { queues: remainingQueues });
-      showToast('Queue line deleted', 'warning');
-    } catch (err: any) {
-      showToast(`Failed to delete line: ${err?.message || 'Error'}`, 'danger');
-    }
-  };
-
-  // Add New Line
-  const handleAddNewLine = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentLoc || !newLineName.trim()) return;
-    try {
-      const locRef = doc(db, 'locations', currentLoc.id);
-      const existingQueues = currentLoc.queues || [];
-      const newNumber = existingQueues.length + 1;
-      const newLineId = `${currentLoc.id}-line-${Date.now()}`;
-      
-      const metrics = calculateLineMetrics(newLineInitialVotes);
-      const newQueue: QueueLine = {
-        id: newLineId,
-        locationId: currentLoc.id,
-        lineNumber: newNumber,
-        name: newLineName.trim(),
-        tokenSlotType: newLineToken,
-        activeReportsCount: newLineInitialVotes,
-        reportsLast15Min: 0,
-        lastUpdatedMinutesAgo: 0,
-        isActive: true,
-        trend: 'Stable',
-        ...metrics
-      };
-
-      const updatedQueues = [...existingQueues, newQueue];
-      await updateDoc(locRef, {
-        queues: updatedQueues,
-        totalReportsCount: (currentLoc.totalReportsCount || 0) + newLineInitialVotes
-      });
-
-      showToast(`New line "${newLineName}" added with starting votes: ${newLineInitialVotes}`, 'success');
-      setShowAddLineModal(false);
-      setNewLineName('');
-      setNewLineInitialVotes(0);
-    } catch (err: any) {
-      showToast(`Failed to add line: ${err?.message || 'Error'}`, 'danger');
-    }
-  };
-
-  // Toggle Counter Location Open/Closed
+  // Admin Actions
   const handleToggleCounterStatus = async (loc: CounterLocation) => {
     try {
       await updateDoc(doc(db, 'locations', loc.id), {
         isOpen: !loc.isOpen
       });
-      showToast(`${loc.name} marked as ${!loc.isOpen ? 'OPEN' : 'CLOSED'}`, 'info');
+      showToast(`${loc.name} marked as ${!loc.isOpen ? 'OPEN' : 'CLOSED'}`);
     } catch (err: any) {
-      showToast(`Failed to update counter status: ${err?.message || 'Error'}`, 'danger');
+      showToast(`Error updating counter: ${err.message}`, 'error');
     }
   };
 
-  // Add New Counter Location
-  const handleAddLocationSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newLocName.trim()) return;
+  const handleToggleQueue = async (queueId: string) => {
+    if (!activeLoc) return;
     try {
-      const locId = 'loc_' + Date.now();
-      const newLocation: CounterLocation = {
-        id: locId,
-        name: newLocName.trim(),
-        shortAddress: newLocAddress.trim() || 'Tirupati, AP',
-        landmark: newLocLandmark.trim() || 'Near Temple Area',
-        operatingHours: newLocHours.trim() || '05:00 AM - 08:00 PM',
-        isOpen: true,
-        latitude: 13.6288,
-        longitude: 79.4192,
-        bestLineId: `${locId}-line-1`,
-        bestLineNumber: 1,
-        bestLineChance: 85,
-        totalReportsCount: 0,
-        queues: [
-          {
-            id: `${locId}-line-1`,
-            locationId: locId,
-            lineNumber: 1,
-            name: 'Line 1 (General)',
-            tokenSlotType: 'General SSD Token',
-            estimatedWaitMinutes: 15,
-            estimatedProbability: 85,
-            crowdLevel: 'Low',
-            probabilityLevel: 'High',
-            lastUpdatedMinutesAgo: 0,
-            activeReportsCount: 0,
-            reportsLast15Min: 0,
-            isActive: true,
-            trend: 'Stable'
+      const updatedQueues = (activeLoc.queues || []).map((q) =>
+        q.id === queueId ? { ...q, isActive: !q.isActive } : q
+      );
+      await updateDoc(doc(db, 'locations', activeLoc.id), { queues: updatedQueues });
+      showToast(`Queue line status updated`);
+    } catch (err: any) {
+      showToast(`Error updating queue: ${err.message}`, 'error');
+    }
+  };
+
+  const handleUpdateQueueField = async (queueId: string, updates: Partial<QueueLine>) => {
+    if (!activeLoc) return;
+    try {
+      const updatedQueues = (activeLoc.queues || []).map((q) => {
+        if (q.id === queueId) {
+          const updated = { ...q, ...updates };
+          // Auto recalculate probabilityLevel if probability was changed
+          if (updates.estimatedProbability !== undefined) {
+            const p = updates.estimatedProbability;
+            updated.probabilityLevel = p >= 70 ? 'High' : p >= 40 ? 'Medium' : 'Low';
           }
-        ]
+          return updated;
+        }
+        return q;
+      });
+
+      // Also recalculate location best line
+      const best = updatedQueues.reduce((b, curr) => 
+        (curr.estimatedProbability > (b?.estimatedProbability || 0) ? curr : b),
+        updatedQueues[0]
+      );
+
+      await updateDoc(doc(db, 'locations', activeLoc.id), {
+        queues: updatedQueues,
+        bestLineId: best?.id || '',
+        bestLineNumber: best?.lineNumber || 1,
+        bestLineChance: best?.estimatedProbability || 0
+      });
+
+      showToast(`Queue updated successfully`);
+    } catch (err: any) {
+      showToast(`Error: ${err.message}`, 'error');
+    }
+  };
+
+  const handleAddNewQueueLine = async () => {
+    if (!activeLoc) return;
+    try {
+      const existingQueues = activeLoc.queues || [];
+      const nextLineNum = existingQueues.length + 1;
+      const newQueue: QueueLine = {
+        id: `${activeLoc.id}-line-${nextLineNum}-${Date.now().toString(36)}`,
+        locationId: activeLoc.id,
+        lineNumber: nextLineNum,
+        name: `Line ${nextLineNum} (SSD Free Slot)`,
+        estimatedProbability: 75,
+        probabilityLevel: 'High',
+        crowdLevel: 'Moderate',
+        trend: 'Stable',
+        activeReportsCount: 0,
+        reportsLast15Min: 0,
+        lastUpdatedMinutesAgo: 0,
+        estimatedWaitMinutes: 30,
+        tokenSlotType: 'SSD General Token',
+        isActive: true
       };
 
-      await setDoc(doc(db, 'locations', locId), newLocation);
-      showToast(`Created counter location "${newLocName}"`, 'success');
-      setShowAddLocModal(false);
+      const updated = [...existingQueues, newQueue];
+      await updateDoc(doc(db, 'locations', activeLoc.id), { queues: updated });
+      showToast(`Added Line ${nextLineNum} to ${activeLoc.name}`);
+    } catch (err: any) {
+      showToast(`Error adding line: ${err.message}`, 'error');
+    }
+  };
+
+  const handleDeleteQueueLine = async (queueId: string) => {
+    if (!activeLoc) return;
+    if (!confirm('Are you sure you want to remove this queue line?')) return;
+    try {
+      const updated = (activeLoc.queues || []).filter((q) => q.id !== queueId);
+      await updateDoc(doc(db, 'locations', activeLoc.id), { queues: updated });
+      showToast(`Queue line removed`);
+    } catch (err: any) {
+      showToast(`Error removing queue: ${err.message}`, 'error');
+    }
+  };
+
+  const handleCreateLocation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newLocName.trim()) return;
+
+    try {
+      const slug = newLocName.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-');
+      const docId = slug || `loc-${Date.now()}`;
+
+      const defaultQueues: QueueLine[] = [1, 2, 3, 4].map((num) => ({
+        id: `${docId}-line-${num}`,
+        locationId: docId,
+        lineNumber: num,
+        name: `Line ${num} (General SSD)`,
+        estimatedProbability: 70,
+        probabilityLevel: 'High',
+        crowdLevel: 'Moderate',
+        trend: 'Stable',
+        activeReportsCount: 0,
+        reportsLast15Min: 0,
+        lastUpdatedMinutesAgo: 0,
+        estimatedWaitMinutes: 25,
+        tokenSlotType: 'SSD Free Token',
+        isActive: true
+      }));
+
+      const newLoc: CounterLocation = {
+        id: docId,
+        name: newLocName.trim(),
+        landmark: newLocLandmark.trim() || newLocAddress.trim(),
+        shortAddress: newLocAddress.trim() || newLocName.trim(),
+        latitude: parseFloat(newLocLat) || 13.6288,
+        longitude: parseFloat(newLocLng) || 79.4192,
+        bestLineId: `${docId}-line-1`,
+        bestLineNumber: 1,
+        bestLineChance: 70,
+        totalReportsCount: 0,
+        isOpen: true,
+        operatingHours: newLocHours.trim() || '05:00 AM - 08:00 PM',
+        queues: defaultQueues
+      };
+
+      await setDoc(doc(db, 'locations', docId), newLoc);
+      setShowAddLocationModal(false);
       setNewLocName('');
       setNewLocAddress('');
       setNewLocLandmark('');
+      setSelectedLocId(docId);
+      showToast(`Counter location "${newLoc.name}" created successfully`);
     } catch (err: any) {
-      showToast(`Failed to create location: ${err?.message || 'Error'}`, 'danger');
+      showToast(`Error creating location: ${err.message}`, 'error');
     }
   };
 
-  // Delete Location
   const handleDeleteLocation = async (locId: string, locName: string) => {
-    if (!confirm(`Are you sure you want to permanently delete "${locName}"?`)) return;
+    if (!confirm(`Are you sure you want to completely delete "${locName}" and all its lines?`)) return;
     try {
       await deleteDoc(doc(db, 'locations', locId));
-      showToast(`Deleted ${locName}`, 'warning');
+      showToast(`Location "${locName}" deleted`);
+      const remaining = locations.filter((l) => l.id !== locId);
+      if (remaining.length > 0) setSelectedLocId(remaining[0].id);
     } catch (err: any) {
-      showToast(`Failed to delete location: ${err?.message || 'Error'}`, 'danger');
+      showToast(`Error deleting location: ${err.message}`, 'error');
     }
   };
 
-  // Publish Broadcast Alert
-  const handlePublishBroadcast = async (e: React.FormEvent) => {
+  const handleSendBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!broadcastTitle.trim() || !broadcastMessage.trim()) return;
+
     try {
-      const alertId = 'alert_' + Date.now();
-      const targetLocation = locations.find(l => l.id === broadcastTargetLoc);
+      const alertId = `alert-${Date.now()}`;
+      const targetLoc = locations.find((l) => l.id === broadcastLocId);
+
       const newAlert: QueueAlert = {
         id: alertId,
-        locationId: broadcastTargetLoc === 'all' ? 'all' : broadcastTargetLoc,
-        queueId: 'general',
-        locationName: targetLocation ? targetLocation.name : 'All Counters',
-        lineName: 'All Lines',
+        locationId: broadcastLocId,
+        queueId: targetLoc?.queues[0]?.id || 'general',
+        locationName: targetLoc ? targetLoc.name : 'All Tirupati Counters',
+        lineName: targetLoc ? 'Counter Advisory' : 'General SSD Notice',
         title: broadcastTitle.trim(),
         message: broadcastMessage.trim(),
         severity: broadcastSeverity,
@@ -427,776 +340,918 @@ export const AdminPage: React.FC = () => {
       };
 
       await setDoc(doc(db, 'alerts', alertId), newAlert);
-      showToast('Official Broadcast alert published to all devotee screens', 'success');
       setBroadcastTitle('');
       setBroadcastMessage('');
+      showToast(`Broadcast alert published live to all pilgrim apps`);
     } catch (err: any) {
-      showToast(`Failed to publish alert: ${err?.message || 'Error'}`, 'danger');
+      showToast(`Error publishing alert: ${err.message}`, 'error');
     }
   };
 
-  // Delete Alert
   const handleDeleteAlert = async (alertId: string) => {
     try {
       await deleteDoc(doc(db, 'alerts', alertId));
-      showToast('Broadcast removed', 'info');
+      showToast(`Alert removed`);
     } catch (err: any) {
-      showToast(`Failed to delete alert: ${err?.message || 'Error'}`, 'danger');
+      showToast(`Error removing alert: ${err.message}`, 'error');
     }
   };
 
-  // Delete Devotee Report
   const handleDeleteReport = async (reportId: string) => {
     try {
       await deleteDoc(doc(db, 'reports', reportId));
-      showToast('Report deleted', 'info');
+      showToast(`Report deleted`);
     } catch (err: any) {
-      showToast(`Failed to delete report: ${err?.message || 'Error'}`, 'danger');
+      showToast(`Error deleting report: ${err.message}`, 'error');
     }
   };
 
-  // Clear all reports
-  const handleClearAllReports = async () => {
-    if (!confirm('Clear all historical devotee reports?')) return;
+  const handleResetAllReportsToday = async () => {
+    if (!confirm('This will reset all active crowd report counts for all locations and queues to 0. Continue?')) return;
     try {
-      const promises = allReports.map(r => deleteDoc(doc(db, 'reports', r.id)));
-      await Promise.all(promises);
-      showToast('All historical reports cleared', 'warning');
+      for (const loc of locations) {
+        const resetQueues = (loc.queues || []).map((q) => ({
+          ...q,
+          activeReportsCount: 0,
+          reportsLast15Min: 0,
+          lastUpdatedMinutesAgo: 0
+        }));
+        await updateDoc(doc(db, 'locations', loc.id), {
+          totalReportsCount: 0,
+          queues: resetQueues
+        });
+      }
+      showToast(`All crowd reports reset successfully`);
     } catch (err: any) {
-      showToast(`Failed to clear reports: ${err?.message || 'Error'}`, 'danger');
+      showToast(`Error resetting reports: ${err.message}`, 'error');
     }
   };
 
-  // Stats Calculations
-  const totalVotesAcrossAllCounters = locations.reduce((sum, l) => {
-    return sum + (l.queues || []).reduce((qSum, q) => qSum + (q.activeReportsCount || 0), 0);
-  }, 0);
-  const openCountersCount = locations.filter(l => l.isOpen).length;
-  const totalLinesCount = locations.reduce((sum, l) => sum + (l.queues?.length || 0), 0);
+  const handleApplyPreset = async (preset: 'rush' | 'normal' | 'closed') => {
+    if (!confirm(`Apply "${preset.toUpperCase()}" status preset to all queues?`)) return;
+    try {
+      for (const loc of locations) {
+        const presetQueues = (loc.queues || []).map((q) => {
+          if (preset === 'rush') {
+            return { ...q, estimatedProbability: 35, probabilityLevel: 'Low' as const, crowdLevel: 'High' as const, trend: 'Rapidly Increasing' as const, estimatedWaitMinutes: 90 };
+          } else if (preset === 'closed') {
+            return { ...q, estimatedProbability: 0, probabilityLevel: 'Low' as const, crowdLevel: 'High' as const, isActive: false };
+          } else {
+            return { ...q, estimatedProbability: 75, probabilityLevel: 'High' as const, crowdLevel: 'Moderate' as const, trend: 'Stable' as const, estimatedWaitMinutes: 30, isActive: true };
+          }
+        });
+        await updateDoc(doc(db, 'locations', loc.id), {
+          isOpen: preset !== 'closed',
+          queues: presetQueues
+        });
+      }
+      showToast(`Preset "${preset}" applied to all counters`);
+    } catch (err: any) {
+      showToast(`Error: ${err.message}`, 'error');
+    }
+  };
 
-  // --------------------------------------------------------------------------
-  // ADMIN AUTHENTICATION SCREEN (Bootstrap Only)
-  // --------------------------------------------------------------------------
+  // If not authenticated, show secure Admin PIN Screen
   if (!isAdminAuthenticated) {
     return (
-      <div className="container py-5">
-        <div className="row justify-content-center">
-          <div className="col-12 col-md-6 col-lg-5">
-            <div className="card shadow-sm border-0">
-              <div className="card-header bg-dark text-white text-center py-3">
-                <h4 className="mb-0 fw-bold">Admin Panel Authentication</h4>
-                <small className="text-secondary">Tirupati QLines Queue Control</small>
-              </div>
-              <div className="card-body p-4">
-                {pinError && (
-                  <div className="alert alert-danger py-2" role="alert">
-                    Invalid PIN code. Please enter the authorized administrator PIN.
-                  </div>
-                )}
-                <form onSubmit={handlePinSubmit}>
-                  <div className="mb-3">
-                    <label htmlFor="adminPin" className="form-label fw-bold">Enter Administrator PIN</label>
-                    <input
-                      id="adminPin"
-                      type="password"
-                      className="form-control form-control-lg text-center"
-                      placeholder="••••"
-                      value={pinInput}
-                      onChange={(e) => setPinInput(e.target.value)}
-                      autoFocus
-                      required
-                    />
-                    <div className="form-text text-center mt-2">
-                      Authorized staff credentials (Default PIN: <code>1210</code>)
-                    </div>
-                  </div>
-                  <button type="submit" className="btn btn-primary btn-lg w-100 fw-bold">
-                    Unlock Admin Panel
-                  </button>
-                </form>
-                <hr className="my-3" />
-                <button
-                  type="button"
-                  className="btn btn-outline-secondary w-100"
-                  onClick={() => setCurrentView('live-queues')}
-                >
-                  Return to Devotee View
-                </button>
-              </div>
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl space-y-6">
+          <div className="text-center space-y-2">
+            <div className="w-16 h-16 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+              <ShieldAlert className="w-8 h-8" />
             </div>
+            <h1 className="text-2xl font-black text-white tracking-tight">Tirupati QLines</h1>
+            <p className="text-sm text-slate-400">Official SSD Tokens Admin & Control Room</p>
+          </div>
+
+          <form onSubmit={handlePinSubmit} className="space-y-4 pt-2">
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                Admin Access PIN / Passcode
+              </label>
+              <input
+                type="password"
+                placeholder="Enter PIN (e.g. 1210)"
+                value={pinInput}
+                onChange={(e) => {
+                  setPinInput(e.target.value);
+                  setPinError(false);
+                }}
+                className={`w-full bg-slate-950 border ${
+                  pinError ? 'border-red-500' : 'border-slate-800'
+                } rounded-xl px-4 py-3 text-white text-lg tracking-widest text-center focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                autoFocus
+              />
+              {pinError ? (
+                <p className="text-xs text-red-400 font-medium mt-1.5 text-center">
+                  Invalid PIN. Default passcode is <strong className="text-white">1210</strong>.
+                </p>
+              ) : (
+                <p className="text-[11px] text-slate-500 mt-1.5 text-center">
+                  Default supervisor PIN: <span className="text-slate-300 font-mono">1210</span>
+                </p>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 active:scale-98 text-white font-bold rounded-xl shadow-lg shadow-blue-600/30 transition-all flex items-center justify-center gap-2"
+            >
+              <ShieldAlert className="w-4 h-4" />
+              <span>Unlock Admin Portal</span>
+            </button>
+          </form>
+
+          <div className="pt-4 border-t border-slate-800/80 text-center">
+            <button
+              onClick={() => {
+                window.history.pushState(null, '', '/');
+                setCurrentView('home');
+              }}
+              className="text-xs text-slate-400 hover:text-slate-200 inline-flex items-center gap-1.5 font-medium transition-colors"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              Return to Devotee Pilgrim View
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
-  // --------------------------------------------------------------------------
-  // MAIN ADMIN DASHBOARD (Bootstrap Only)
-  // --------------------------------------------------------------------------
+  const totalReportsCount = locations.reduce((acc, l) => acc + (l.totalReportsCount || 0), 0);
+  const totalQueuesCount = locations.reduce((acc, l) => acc + (l.queues?.length || 0), 0);
+  const activeQueuesCount = locations.reduce(
+    (acc, l) => acc + (l.queues?.filter((q) => q.isActive).length || 0),
+    0
+  );
+
   return (
-    <div className="bg-light min-vh-100 pb-5">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
+      {/* Toast Notification */}
+      {notification && (
+        <div
+          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-2xl shadow-xl border flex items-center gap-3 transition-all animate-bounce ${
+            notification.type === 'error'
+              ? 'bg-red-950/90 border-red-800 text-red-200'
+              : notification.type === 'info'
+              ? 'bg-blue-950/90 border-blue-800 text-blue-200'
+              : 'bg-emerald-950/90 border-emerald-800 text-emerald-200'
+          }`}
+        >
+          {notification.type === 'error' ? (
+            <AlertTriangle className="w-5 h-5 text-red-400" />
+          ) : (
+            <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+          )}
+          <span className="text-xs font-bold">{notification.message}</span>
+        </div>
+      )}
+
       {/* Top Navbar */}
-      <nav className="navbar navbar-expand-lg navbar-dark bg-dark px-3 py-2 shadow-sm">
-        <div className="container-fluid">
-          <span className="navbar-brand fw-bold text-white mb-0">
-            Tirupati QLines — Admin Panel
-          </span>
-          
-          <div className="d-flex align-items-center gap-2">
-            <span className="badge bg-success py-2 px-3">
-              ● Live Sync Connected
-            </span>
+      <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 lg:px-8 py-3">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md">
+              <ShieldAlert className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="font-black text-white text-base lg:text-lg leading-none">
+                  Tirupati SSD Admin
+                </h1>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold tracking-wider uppercase">
+                  Live Sync
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 font-medium mt-0.5">
+                SSD Counters Control Room · Route: <span className="font-mono text-blue-400">/admin</span>
+              </p>
+            </div>
+          </div>
+
+          {/* Quick Actions in Header */}
+          <div className="flex items-center gap-2 lg:gap-3">
             <button
-              className="btn btn-sm btn-outline-light"
-              onClick={() => setCurrentView('live-queues')}
+              onClick={() => handleApplyPreset('normal')}
+              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition-colors"
             >
-              Devotee View
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Normal Preset</span>
             </button>
+
             <button
-              className="btn btn-sm btn-danger"
-              onClick={handleLogout}
+              onClick={() => {
+                window.history.pushState(null, '', '/');
+                setCurrentView('home');
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md shadow-blue-600/30 transition-all"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Open Pilgrim App</span>
+            </button>
+
+            <button
+              onClick={() => {
+                sessionStorage.removeItem('tq_admin_auth');
+                setIsAdminAuthenticated(false);
+              }}
+              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-red-950/40 hover:text-red-300 text-slate-400 text-xs font-bold border border-slate-700 transition-colors"
+              title="Lock Admin Portal"
             >
               Logout
             </button>
           </div>
         </div>
-      </nav>
+      </header>
 
       {/* Main Container */}
-      <div className="container-fluid px-3 px-md-4 py-3">
-        {/* Toast Alert Notification */}
-        {toastMessage && (
-          <div className={`alert alert-${toastMessage.variant} alert-dismissible fade show shadow-sm mb-3`} role="alert">
-            <strong>Notice:</strong> {toastMessage.text}
-            <button
-              type="button"
-              className="btn-close"
-              onClick={() => setToastMessage(null)}
-              aria-label="Close"
-            ></button>
+      <div className="max-w-7xl w-full mx-auto px-4 lg:px-8 py-6 flex-1 flex flex-col gap-6">
+        {/* Navigation Tabs */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 border-b border-slate-800 no-scrollbar">
+          {[
+            { id: 'overview', label: 'Dashboard Overview', icon: Activity },
+            { id: 'counters', label: 'Counter Locations', icon: Building2 },
+            { id: 'queues', label: 'Algorithm & Line Overrides', icon: Sliders },
+            { id: 'broadcasts', label: 'Live Broadcasts', icon: Radio },
+            { id: 'reports', label: 'Devotee Reports Feed', icon: Users },
+            { id: 'system', label: 'System Maintenance', icon: Settings }
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`px-4 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all ${
+                  isActive
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30'
+                    : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-800/80'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* TAB 1: OVERVIEW */}
+        {activeTab === 'overview' && (
+          <div className="space-y-6 animate-fade-in">
+            {/* Key Metrics */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 space-y-2">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="text-xs font-bold uppercase tracking-wider">Counters</span>
+                  <Building2 className="w-5 h-5 text-blue-400" />
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-black text-white">{locations.length}</span>
+                  <span className="text-xs text-emerald-400 font-semibold">
+                    {locations.filter((l) => l.isOpen).length} Open
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500">Tirupati SSD Counter Centers</p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 space-y-2">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="text-xs font-bold uppercase tracking-wider">Queue Lines</span>
+                  <Sliders className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-black text-white">{totalQueuesCount}</span>
+                  <span className="text-xs text-emerald-400 font-semibold">{activeQueuesCount} Active</span>
+                </div>
+                <p className="text-[11px] text-slate-500">Individual Slotted Token Lines</p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 space-y-2">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="text-xs font-bold uppercase tracking-wider">Devotee Reports</span>
+                  <Users className="w-5 h-5 text-purple-400" />
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-black text-white">{allReports.length}</span>
+                  <span className="text-xs text-purple-400 font-semibold">Live Feed</span>
+                </div>
+                <p className="text-[11px] text-slate-500">Total Crowd Submissions</p>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 space-y-2">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="text-xs font-bold uppercase tracking-wider">Active Broadcasts</span>
+                  <Radio className="w-5 h-5 text-amber-400" />
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-black text-white">{alerts.length}</span>
+                  <span className="text-xs text-amber-400 font-semibold">Live Advisories</span>
+                </div>
+                <p className="text-[11px] text-slate-500">Pilgrim Notification Tickers</p>
+              </div>
+            </div>
+
+            {/* Live Counters Overview Table */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 lg:p-6 space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <h2 className="text-base font-bold text-white">Live Counter Status</h2>
+                  <p className="text-xs text-slate-400">Current status of all SSD ticket distribution centers</p>
+                </div>
+                <button
+                  onClick={() => setShowAddLocationModal(true)}
+                  className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-blue-600/30"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Counter</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                {locations.map((loc) => {
+                  const best = (loc.queues || []).reduce(
+                    (b, q) => (q.estimatedProbability > (b?.estimatedProbability || 0) ? q : b),
+                    (loc.queues || [])[0]
+                  );
+
+                  return (
+                    <div
+                      key={loc.id}
+                      className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3 flex flex-col justify-between"
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${
+                              loc.isOpen
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                            }`}
+                          >
+                            {loc.isOpen ? 'Open Now' : 'Closed'}
+                          </span>
+                          <span className="text-xs text-slate-500 font-mono">
+                            {loc.queues?.length || 0} Lines
+                          </span>
+                        </div>
+
+                        <div>
+                          <h3 className="font-bold text-white text-base">{loc.name}</h3>
+                          <p className="text-xs text-slate-400">{loc.landmark || loc.shortAddress}</p>
+                        </div>
+
+                        <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800/80 flex items-center justify-between text-xs">
+                          <span className="text-slate-400">Best Chance Line</span>
+                          <span className="font-bold text-emerald-400">
+                            Line {best?.lineNumber || 1} ({best?.estimatedProbability || 0}%)
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-2 border-t border-slate-800/80">
+                        <button
+                          onClick={() => {
+                            setSelectedLocId(loc.id);
+                            setActiveTab('queues');
+                          }}
+                          className="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+                        >
+                          <Sliders className="w-3.5 h-3.5" />
+                          <span>Manage Lines</span>
+                        </button>
+                        <button
+                          onClick={() => handleToggleCounterStatus(loc)}
+                          className={`px-3 py-2 rounded-xl text-xs font-bold ${
+                            loc.isOpen
+                              ? 'bg-red-950/40 text-red-400 hover:bg-red-950/60 border border-red-900/50'
+                              : 'bg-emerald-950/40 text-emerald-400 hover:bg-emerald-950/60 border border-emerald-900/50'
+                          }`}
+                        >
+                          {loc.isOpen ? 'Close' : 'Open'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
 
-        {/* Top Metric Cards */}
-        <div className="row g-3 mb-4">
-          <div className="col-6 col-md-3">
-            <div className="card shadow-sm border-0 h-100">
-              <div className="card-body">
-                <div className="text-muted small text-uppercase fw-bold">Total Active Votes</div>
-                <h3 className="fw-bold text-primary mb-0">{totalVotesAcrossAllCounters}</h3>
-                <small className="text-muted">Live across all lines</small>
+        {/* TAB 2: COUNTER LOCATIONS */}
+        {activeTab === 'counters' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div>
+                <h2 className="text-lg font-bold text-white">Counter Locations Management</h2>
+                <p className="text-xs text-slate-400">Create, edit, or configure SSD token distribution centers</p>
               </div>
+              <button
+                onClick={() => setShowAddLocationModal(true)}
+                className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-blue-600/30"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add New Center</span>
+              </button>
             </div>
-          </div>
-          <div className="col-6 col-md-3">
-            <div className="card shadow-sm border-0 h-100">
-              <div className="card-body">
-                <div className="text-muted small text-uppercase fw-bold">Open Counters</div>
-                <h3 className="fw-bold text-success mb-0">{openCountersCount} / {locations.length}</h3>
-                <small className="text-muted">Active ticket centers</small>
-              </div>
-            </div>
-          </div>
-          <div className="col-6 col-md-3">
-            <div className="card shadow-sm border-0 h-100">
-              <div className="card-body">
-                <div className="text-muted small text-uppercase fw-bold">Active Queue Lines</div>
-                <h3 className="fw-bold text-dark mb-0">{totalLinesCount}</h3>
-                <small className="text-muted">Managed lines</small>
-              </div>
-            </div>
-          </div>
-          <div className="col-6 col-md-3">
-            <div className="card shadow-sm border-0 h-100">
-              <div className="card-body">
-                <div className="text-muted small text-uppercase fw-bold">Devotee Reports Today</div>
-                <h3 className="fw-bold text-info mb-0">{allReports.length}</h3>
-                <small className="text-muted">Live report stream</small>
-              </div>
-            </div>
-          </div>
-        </div>
 
-        {/* Primary Navigation Tabs */}
-        <ul className="nav nav-tabs mb-4 bg-white px-3 pt-2 rounded shadow-sm border-0">
-          <li className="nav-item">
-            <button
-              className={`nav-link fw-bold ${activeTab === 'voting' ? 'active text-primary' : 'text-secondary'}`}
-              onClick={() => setActiveTab('voting')}
-            >
-              Voting Numbers Management
-            </button>
-          </li>
-          <li className="nav-item">
-            <button
-              className={`nav-link fw-bold ${activeTab === 'locations' ? 'active text-primary' : 'text-secondary'}`}
-              onClick={() => setActiveTab('locations')}
-            >
-              Counter Locations ({locations.length})
-            </button>
-          </li>
-          <li className="nav-item">
-            <button
-              className={`nav-link fw-bold ${activeTab === 'reports' ? 'active text-primary' : 'text-secondary'}`}
-              onClick={() => setActiveTab('reports')}
-            >
-              Live Reports ({allReports.length})
-            </button>
-          </li>
-          <li className="nav-item">
-            <button
-              className={`nav-link fw-bold ${activeTab === 'broadcasts' ? 'active text-primary' : 'text-secondary'}`}
-              onClick={() => setActiveTab('broadcasts')}
-            >
-              Broadcast Notices ({alerts.length})
-            </button>
-          </li>
-        </ul>
+            <div className="grid grid-cols-1 gap-4">
+              {locations.map((loc) => (
+                <div
+                  key={loc.id}
+                  className="bg-slate-900 border border-slate-800 rounded-3xl p-5 lg:p-6 space-y-4"
+                >
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-2xl bg-slate-800 text-blue-400 flex items-center justify-center border border-slate-700">
+                        <Building2 className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-white text-base">{loc.name}</h3>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              loc.isOpen
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                            }`}
+                          >
+                            {loc.isOpen ? 'ACTIVE' : 'INACTIVE'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 font-mono mt-0.5">ID: {loc.id}</p>
+                      </div>
+                    </div>
 
-        {/* TAB 1: VOTING NUMBERS MANAGEMENT */}
-        {activeTab === 'voting' && (
-          <div>
-            {/* Location Selector Bar */}
-            <div className="card shadow-sm border-0 mb-4">
-              <div className="card-body py-3">
-                <div className="row align-items-center g-3">
-                  <div className="col-12 col-md-4">
-                    <label className="form-label small fw-bold text-muted mb-1">SELECT COUNTER LOCATION</label>
-                    <select
-                      className="form-select form-select-lg fw-bold"
-                      value={selectedLocId}
-                      onChange={(e) => setSelectedLocId(e.target.value)}
-                    >
-                      {locations.map((loc) => (
-                        <option key={loc.id} value={loc.id}>
-                          {loc.name} {loc.isOpen ? '(Open)' : '(Closed)'} — {(loc.queues || []).length} Lines
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {currentLoc && (
-                    <div className="col-12 col-md-8 d-flex flex-wrap align-items-center justify-content-md-end gap-2">
+                    <div className="flex items-center gap-2">
                       <button
-                        className={`btn ${currentLoc.isOpen ? 'btn-outline-danger' : 'btn-success'}`}
-                        onClick={() => handleToggleCounterStatus(currentLoc)}
+                        onClick={() => handleToggleCounterStatus(loc)}
+                        className={`px-3 py-2 rounded-xl text-xs font-bold border ${
+                          loc.isOpen
+                            ? 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                            : 'bg-emerald-900/30 text-emerald-400 border-emerald-800 hover:bg-emerald-900/50'
+                        }`}
                       >
-                        {currentLoc.isOpen ? 'Close Counter Center' : 'Open Counter Center'}
+                        {loc.isOpen ? 'Set as Closed' : 'Set as Open'}
                       </button>
-
                       <button
-                        className="btn btn-primary"
-                        onClick={() => setShowAddLineModal(true)}
+                        onClick={() => handleDeleteLocation(loc.id, loc.name)}
+                        className="p-2 rounded-xl bg-slate-800 text-red-400 hover:bg-red-950/50 border border-slate-700 hover:border-red-800"
+                        title="Delete Center"
                       >
-                        + Add Queue Line
-                      </button>
-
-                      <button
-                        className="btn btn-outline-dark"
-                        onClick={handleBatchSaveAllLines}
-                      >
-                        Save All Line Numbers
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Explanation / Guidance Banner */}
-            <div className="alert alert-info border-0 shadow-sm d-flex align-items-center justify-content-between mb-3 py-2">
-              <div className="small">
-                <strong>Active Voting Management Mode:</strong> You can edit any voting number in real time while devotee voting is ongoing. When you update a number, it immediately becomes the new starting baseline. Any new votes from devotees will continue counting upwards from the updated number without resetting or overwriting your edits.
-              </div>
-            </div>
-
-            {/* Main Live Voting Numbers Table */}
-            {currentLoc && (
-              <div className="card shadow-sm border-0">
-                <div className="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-                  <div>
-                    <h5 className="mb-0 fw-bold">{currentLoc.name} — Live Queue Lines</h5>
-                    <small className="text-muted">{currentLoc.shortAddress} • Total Lines: {(currentLoc.queues || []).length}</small>
                   </div>
-                  <div>
-                    <span className={`badge ${currentLoc.isOpen ? 'bg-success' : 'bg-danger'} fs-6`}>
-                      {currentLoc.isOpen ? 'Counter Open' : 'Counter Closed'}
-                    </span>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <div>
+                      <span className="text-slate-500 font-medium">Landmark / Address</span>
+                      <p className="text-slate-200 font-semibold mt-0.5">{loc.landmark || '—'}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-medium">Operating Hours</span>
+                      <p className="text-slate-200 font-semibold mt-0.5">{loc.operatingHours || '05:00 AM - 08:00 PM'}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-medium">GPS Coordinates</span>
+                      <p className="text-slate-200 font-mono mt-0.5">
+                        {loc.latitude}, {loc.longitude}
+                      </p>
+                    </div>
                   </div>
                 </div>
+              ))}
+            </div>
+          </div>
+        )}
 
-                <div className="table-responsive">
-                  <table className="table table-bordered table-hover align-middle mb-0">
-                    <thead className="table-light">
-                      <tr>
-                        <th style={{ width: '60px' }} className="text-center">Line #</th>
-                        <th>Line Name & Slot</th>
-                        <th style={{ width: '100px' }} className="text-center">Status</th>
-                        <th style={{ width: '120px' }} className="text-center bg-primary-subtle text-primary">
-                          Current Votes
-                        </th>
-                        <th style={{ width: '280px' }} className="bg-light">
-                          Edit Voting Number
-                        </th>
-                        <th style={{ width: '150px' }} className="text-center">Probability (%)</th>
-                        <th style={{ width: '110px' }} className="text-center">Est. Wait</th>
-                        <th style={{ width: '110px' }} className="text-center">Crowd</th>
-                        <th style={{ width: '160px' }} className="text-center">Simulate / Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(!currentLoc.queues || currentLoc.queues.length === 0) ? (
-                        <tr>
-                          <td colSpan={9} className="text-center py-4 text-muted">
-                            No queue lines created for this counter yet. Click "+ Add Queue Line" to add one.
-                          </td>
-                        </tr>
-                      ) : (
-                        currentLoc.queues.map((q) => {
-                          const currentInputValue = editingVotes[q.id] !== undefined ? editingVotes[q.id] : (q.activeReportsCount || 0);
-                          const isSaving = savingQueueId === q.id;
-                          const isSimulating = isSimulatingVote === q.id;
-
-                          return (
-                            <tr key={q.id}>
-                              {/* Line # */}
-                              <td className="text-center fw-bold fs-6">
-                                Line {q.lineNumber}
-                              </td>
-
-                              {/* Line Name & Slot */}
-                              <td>
-                                <div className="fw-bold">{q.name}</div>
-                                <div className="text-muted small">{q.tokenSlotType || 'General SSD Token'}</div>
-                              </td>
-
-                              {/* Status Toggle */}
-                              <td className="text-center">
-                                <button
-                                  className={`btn btn-sm w-100 ${q.isActive ? 'btn-outline-success' : 'btn-outline-secondary'}`}
-                                  onClick={() => handleToggleLineActive(q)}
-                                  title="Click to toggle status"
-                                >
-                                  {q.isActive ? 'Active' : 'Closed'}
-                                </button>
-                              </td>
-
-                              {/* Prominent Current Voting Number Display */}
-                              <td className="text-center bg-primary-subtle">
-                                <span className="badge bg-primary fs-5 px-3 py-2">
-                                  {q.activeReportsCount || 0}
-                                </span>
-                                <div className="small text-primary fw-semibold mt-1">
-                                  live votes
-                                </div>
-                              </td>
-
-                              {/* Edit Voting Number Controls */}
-                              <td className="bg-light">
-                                <div className="d-flex align-items-center gap-1">
-                                  {/* Quick -5 button */}
-                                  <button
-                                    className="btn btn-outline-secondary btn-sm px-2"
-                                    onClick={() => handleQuickAdjustVotes(q.id, -5)}
-                                    disabled={isSaving}
-                                    title="Subtract 5 votes"
-                                  >
-                                    -5
-                                  </button>
-
-                                  {/* Quick -1 button */}
-                                  <button
-                                    className="btn btn-outline-secondary btn-sm px-2"
-                                    onClick={() => handleQuickAdjustVotes(q.id, -1)}
-                                    disabled={isSaving}
-                                    title="Subtract 1 vote"
-                                  >
-                                    -1
-                                  </button>
-
-                                  {/* Direct Number Input */}
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    className="form-control form-control-sm text-center fw-bold"
-                                    style={{ width: '70px' }}
-                                    value={currentInputValue}
-                                    onChange={(e) => handleVoteInputChange(q.id, e.target.value)}
-                                  />
-
-                                  {/* Quick +1 button */}
-                                  <button
-                                    className="btn btn-outline-secondary btn-sm px-2"
-                                    onClick={() => handleQuickAdjustVotes(q.id, 1)}
-                                    disabled={isSaving}
-                                    title="Add 1 vote"
-                                  >
-                                    +1
-                                  </button>
-
-                                  {/* Quick +5 button */}
-                                  <button
-                                    className="btn btn-outline-secondary btn-sm px-2"
-                                    onClick={() => handleQuickAdjustVotes(q.id, 5)}
-                                    disabled={isSaving}
-                                    title="Add 5 votes"
-                                  >
-                                    +5
-                                  </button>
-
-                                  {/* Save Button */}
-                                  <button
-                                    className="btn btn-primary btn-sm px-2 fw-bold ms-1"
-                                    onClick={() => handleSaveLineVotes(q.id)}
-                                    disabled={isSaving}
-                                    title="Save this number directly to live database"
-                                  >
-                                    {isSaving ? '...' : 'Save'}
-                                  </button>
-                                </div>
-                              </td>
-
-                              {/* Probability (%) */}
-                              <td className="text-center">
-                                <span className={`badge ${
-                                  q.estimatedProbability >= 70 ? 'bg-success' :
-                                  q.estimatedProbability >= 45 ? 'bg-warning text-dark' : 'bg-danger'
-                                } fs-6`}>
-                                  {q.estimatedProbability}%
-                                </span>
-                                <div className="small text-muted">{q.probabilityLevel || 'Normal'}</div>
-                              </td>
-
-                              {/* Wait Time */}
-                              <td className="text-center fw-semibold">
-                                {q.estimatedWaitMinutes}m
-                              </td>
-
-                              {/* Crowd Level */}
-                              <td className="text-center">
-                                <span className="badge bg-secondary">
-                                  {q.crowdLevel || 'Low'}
-                                </span>
-                              </td>
-
-                              {/* Simulate User Vote / More Actions */}
-                              <td className="text-center">
-                                <div className="btn-group btn-group-sm">
-                                  <button
-                                    className="btn btn-outline-success"
-                                    onClick={() => handleSimulateDevoteeVote(q.id)}
-                                    disabled={isSimulating}
-                                    title="Simulate 1 user vote to test counting from updated number"
-                                  >
-                                    {isSimulating ? '...' : '+1 User Vote'}
-                                  </button>
-                                  <button
-                                    className="btn btn-outline-secondary"
-                                    onClick={() => handleOpenEditLineModal(q)}
-                                    title="Edit Full Line Parameters"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    className="btn btn-outline-danger"
-                                    onClick={() => handleDeleteLine(q.id)}
-                                    title="Delete line"
-                                  >
-                                    ✕
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
+        {/* TAB 3: QUEUE OVERRIDES & PROBABILITIES */}
+        {activeTab === 'queues' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 lg:p-6 space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <h2 className="text-lg font-bold text-white">Algorithm & Line Overrides</h2>
+                  <p className="text-xs text-slate-400">
+                    Real-time manual overrides for token availability, crowd velocity, and wait times
+                  </p>
                 </div>
 
-                {/* Footer Save All */}
-                <div className="card-footer bg-white py-3 d-flex justify-content-between align-items-center">
-                  <span className="text-muted small">
-                    Changes made with "Save" or "+/-" are immediately active in the live devotee app.
-                  </span>
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleBatchSaveAllLines}
+                <div className="flex items-center gap-2">
+                  <select
+                    value={selectedLocId}
+                    onChange={(e) => setSelectedLocId(e.target.value)}
+                    className="bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs font-bold text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    Save All Voting Numbers for {currentLoc.name}
+                    {locations.map((loc) => (
+                      <option key={loc.id} value={loc.id}>
+                        {loc.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    onClick={handleAddNewQueueLine}
+                    className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Add Line</span>
                   </button>
                 </div>
               </div>
-            )}
+
+              {activeLoc && (
+                <div className="space-y-3 pt-2">
+                  {(activeLoc.queues || []).map((q) => (
+                    <div
+                      key={q.id}
+                      className={`bg-slate-950 border rounded-2xl p-4 space-y-4 transition-all ${
+                        q.isActive ? 'border-slate-800' : 'border-red-900/40 opacity-70'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-3">
+                          <span className="w-8 h-8 rounded-xl bg-blue-600/20 border border-blue-500/30 text-blue-400 font-black text-sm flex items-center justify-center font-mono">
+                            L{q.lineNumber}
+                          </span>
+                          <div>
+                            <input
+                              type="text"
+                              defaultValue={q.name}
+                              onBlur={(e) => handleUpdateQueueField(q.id, { name: e.target.value })}
+                              className="bg-transparent text-white font-bold text-sm border-b border-transparent hover:border-slate-700 focus:border-blue-500 focus:outline-none px-1"
+                            />
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="text-[11px] text-slate-400 font-mono">ID: {q.id}</span>
+                              <span className="text-[11px] text-slate-500">·</span>
+                              <input
+                                type="text"
+                                defaultValue={q.tokenSlotType}
+                                onBlur={(e) => handleUpdateQueueField(q.id, { tokenSlotType: e.target.value })}
+                                className="bg-transparent text-[11px] text-slate-400 hover:text-white border-b border-transparent hover:border-slate-700 focus:outline-none px-1"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleToggleQueue(q.id)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${
+                              q.isActive
+                                ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/50 hover:bg-emerald-950/60'
+                                : 'bg-red-950/40 text-red-400 border-red-900/50 hover:bg-red-950/60'
+                            }`}
+                          >
+                            {q.isActive ? 'Active Line' : 'Closed Line'}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteQueueLine(q.id)}
+                            className="p-1.5 rounded-xl text-slate-500 hover:text-red-400 hover:bg-slate-900"
+                            title="Delete Line"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Controls Grid */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-1 border-t border-slate-900">
+                        {/* Probability Override */}
+                        <div className="space-y-1">
+                          <label className="text-slate-400 font-medium">Est. Chance (%)</label>
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              defaultValue={q.estimatedProbability}
+                              onBlur={(e) =>
+                                handleUpdateQueueField(q.id, {
+                                  estimatedProbability: Math.min(100, Math.max(0, parseInt(e.target.value) || 0))
+                                })
+                              }
+                              className="w-20 bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-bold text-center focus:ring-1 focus:ring-blue-500 outline-none"
+                            />
+                            <span className="text-sm font-black text-blue-400 font-sans">%</span>
+                          </div>
+                        </div>
+
+                        {/* Crowd Level */}
+                        <div className="space-y-1">
+                          <label className="text-slate-400 font-medium">Crowd Density</label>
+                          <select
+                            defaultValue={q.crowdLevel}
+                            onChange={(e) => handleUpdateQueueField(q.id, { crowdLevel: e.target.value as any })}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-medium focus:ring-1 focus:ring-blue-500 outline-none"
+                          >
+                            <option value="Low">Low</option>
+                            <option value="Moderate">Moderate</option>
+                            <option value="High">High</option>
+                            <option value="Very High">Very High</option>
+                          </select>
+                        </div>
+
+                        {/* Trend Velocity */}
+                        <div className="space-y-1">
+                          <label className="text-slate-400 font-medium">Velocity Trend</label>
+                          <select
+                            defaultValue={q.trend}
+                            onChange={(e) => handleUpdateQueueField(q.id, { trend: e.target.value as any })}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-medium focus:ring-1 focus:ring-blue-500 outline-none"
+                          >
+                            <option value="Stable">Stable</option>
+                            <option value="Increasing">Increasing</option>
+                            <option value="Rapidly Increasing">Rapidly Increasing</option>
+                            <option value="Decreasing">Decreasing</option>
+                          </select>
+                        </div>
+
+                        {/* Estimated Wait */}
+                        <div className="space-y-1">
+                          <label className="text-slate-400 font-medium">Est. Wait (Mins)</label>
+                          <input
+                            type="number"
+                            min="5"
+                            max="300"
+                            defaultValue={q.estimatedWaitMinutes || 30}
+                            onBlur={(e) =>
+                              handleUpdateQueueField(q.id, {
+                                estimatedWaitMinutes: parseInt(e.target.value) || 30
+                              })
+                            }
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-white font-medium text-center focus:ring-1 focus:ring-blue-500 outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
-        {/* TAB 2: COUNTER LOCATIONS MANAGEMENT */}
-        {activeTab === 'locations' && (
-          <div>
-            <div className="d-flex justify-content-between align-items-center mb-3">
-              <h5 className="mb-0 fw-bold">All Counter Centers in Tirupati</h5>
-              <button
-                className="btn btn-primary"
-                onClick={() => setShowAddLocModal(true)}
-              >
-                + Add Counter Center
-              </button>
-            </div>
+        {/* TAB 4: LIVE BROADCASTS */}
+        {activeTab === 'broadcasts' && (
+          <div className="space-y-6 animate-fade-in">
+            {/* Create Broadcast */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 lg:p-6 space-y-4">
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <Radio className="w-5 h-5 text-amber-400" />
+                Publish Live Pilgrim Broadcast
+              </h2>
+              <form onSubmit={handleSendBroadcast} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                      Alert Title
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Srinivasam SSD Quota Approaching Full"
+                      value={broadcastTitle}
+                      onChange={(e) => setBroadcastTitle(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                      required
+                    />
+                  </div>
 
-            <div className="row g-3">
-              {locations.map((loc) => {
-                const totalLocVotes = (loc.queues || []).reduce((s, q) => s + (q.activeReportsCount || 0), 0);
-                return (
-                  <div key={loc.id} className="col-12 col-md-6 col-lg-4">
-                    <div className="card shadow-sm border-0 h-100">
-                      <div className="card-header bg-white d-flex justify-content-between align-items-center py-3">
-                        <h6 className="mb-0 fw-bold">{loc.name}</h6>
-                        <span className={`badge ${loc.isOpen ? 'bg-success' : 'bg-danger'}`}>
-                          {loc.isOpen ? 'OPEN' : 'CLOSED'}
-                        </span>
-                      </div>
-                      <div className="card-body">
-                        <p className="small text-muted mb-2">{loc.landmark} • {loc.shortAddress}</p>
-                        <div className="d-flex justify-content-between mb-2">
-                          <span className="small text-muted">Operating Hours:</span>
-                          <span className="small fw-semibold">{loc.operatingHours || '05:00 AM - 08:00 PM'}</span>
-                        </div>
-                        <div className="d-flex justify-content-between mb-2">
-                          <span className="small text-muted">Total Lines:</span>
-                          <span className="small fw-bold">{(loc.queues || []).length} lines</span>
-                        </div>
-                        <div className="d-flex justify-content-between mb-3">
-                          <span className="small text-muted">Active Votes:</span>
-                          <span className="small fw-bold text-primary">{totalLocVotes} votes</span>
-                        </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                        Target Counter
+                      </label>
+                      <select
+                        value={broadcastLocId}
+                        onChange={(e) => setBroadcastLocId(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-bold text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                      >
+                        <option value="all">All Counters (Global)</option>
+                        {locations.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
 
-                        <div className="d-grid gap-2">
-                          <button
-                            className="btn btn-outline-primary btn-sm"
-                            onClick={() => {
-                              setSelectedLocId(loc.id);
-                              setActiveTab('voting');
-                            }}
-                          >
-                            Manage Line Votes ({loc.queues?.length || 0})
-                          </button>
-                          <div className="d-flex gap-2">
-                            <button
-                              className={`btn btn-sm flex-fill ${loc.isOpen ? 'btn-outline-warning' : 'btn-outline-success'}`}
-                              onClick={() => handleToggleCounterStatus(loc)}
-                            >
-                              {loc.isOpen ? 'Close' : 'Open'}
-                            </button>
-                            <button
-                              className="btn btn-outline-danger btn-sm"
-                              onClick={() => handleDeleteLocation(loc.id, loc.name)}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </div>
-                      </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                        Severity Level
+                      </label>
+                      <select
+                        value={broadcastSeverity}
+                        onChange={(e) => setBroadcastSeverity(e.target.value as any)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-bold text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                      >
+                        <option value="warning">Warning (Orange)</option>
+                        <option value="alert">High Alert (Red)</option>
+                        <option value="info">Info Advisory (Blue)</option>
+                        <option value="success">Success / Slot Open (Green)</option>
+                      </select>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+                </div>
 
-        {/* TAB 3: LIVE REPORTS STREAM */}
-        {activeTab === 'reports' && (
-          <div className="card shadow-sm border-0">
-            <div className="card-header bg-white d-flex justify-content-between align-items-center py-3">
-              <div>
-                <h5 className="mb-0 fw-bold">Live Devotee Queue Reports & Votes Stream</h5>
-                <small className="text-muted">Real-time incoming submissions from pilgrims</small>
-              </div>
-              <button
-                className="btn btn-outline-danger btn-sm"
-                onClick={handleClearAllReports}
-                disabled={allReports.length === 0}
-              >
-                Clear History
-              </button>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                    Message Body
+                  </label>
+                  <textarea
+                    rows={3}
+                    placeholder="e.g. Line 2 moving very smoothly with <25 min wait time. Devotees arriving after 11 AM please proceed to Vishnu Nivasam."
+                    value={broadcastMessage}
+                    onChange={(e) => setBroadcastMessage(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-98 text-white font-bold text-sm flex items-center gap-2 shadow-lg shadow-blue-600/30"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>Publish Alert Live</span>
+                </button>
+              </form>
             </div>
 
-            <div className="table-responsive">
-              <table className="table table-bordered table-hover align-middle mb-0">
-                <thead className="table-light">
-                  <tr>
-                    <th>Time</th>
-                    <th>Devotee User</th>
-                    <th>Location</th>
-                    <th>Line Name</th>
-                    <th className="text-center">Group Size</th>
-                    <th className="text-center">GPS Verified</th>
-                    <th className="text-center">Status</th>
-                    <th style={{ width: '80px' }} className="text-center">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {allReports.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="text-center py-4 text-muted">
-                        No community reports logged yet.
-                      </td>
-                    </tr>
-                  ) : (
-                    allReports.map((rep) => (
-                      <tr key={rep.id}>
-                        <td className="fw-semibold">{rep.timestamp || 'Just now'}</td>
-                        <td>
-                          <code>{rep.userId?.substring(0, 10)}...</code>
-                        </td>
-                        <td className="fw-semibold">{rep.locationName}</td>
-                        <td>{rep.lineName}</td>
-                        <td className="text-center">
-                          <span className="badge bg-secondary">{rep.peopleCount || 1} people</span>
-                        </td>
-                        <td className="text-center">
-                          {rep.locationVerified ? (
-                            <span className="badge bg-success">GPS Verified</span>
-                          ) : (
-                            <span className="badge bg-light text-muted border">Unverified</span>
-                          )}
-                        </td>
-                        <td className="text-center">
-                          <span className={`badge ${rep.status === 'active' ? 'bg-info text-dark' : 'bg-light text-muted border'}`}>
-                            {rep.status}
+            {/* Active Broadcasts List */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 lg:p-6 space-y-4">
+              <h2 className="text-base font-bold text-white">Active Live Alerts ({alerts.length})</h2>
+              {alerts.length === 0 ? (
+                <div className="py-8 text-center text-slate-500 text-xs">
+                  No active broadcast alerts. New alerts created above will appear immediately in pilgrim apps.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {alerts.map((a) => (
+                    <div
+                      key={a.id}
+                      className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex items-center justify-between gap-4"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase ${
+                              a.severity === 'alert'
+                                ? 'bg-red-500/20 text-red-400'
+                                : a.severity === 'warning'
+                                ? 'bg-amber-500/20 text-amber-400'
+                                : 'bg-blue-500/20 text-blue-400'
+                            }`}
+                          >
+                            {a.severity}
                           </span>
-                        </td>
-                        <td className="text-center">
-                          <button
-                            className="btn btn-sm btn-outline-danger"
-                            onClick={() => handleDeleteReport(rep.id)}
-                            title="Delete report"
-                          >
-                            ✕
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                          <span className="text-xs font-bold text-slate-400">{a.locationName}</span>
+                          <span className="text-xs text-slate-600">· {a.timestamp}</span>
+                        </div>
+                        <h4 className="font-bold text-white text-sm">{a.title}</h4>
+                        <p className="text-xs text-slate-300">{a.message}</p>
+                      </div>
+
+                      <button
+                        onClick={() => handleDeleteAlert(a.id)}
+                        className="p-2 rounded-xl text-slate-500 hover:text-red-400 hover:bg-slate-900 transition-colors"
+                        title="Delete Alert"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {/* TAB 4: BROADCAST NOTICES */}
-        {activeTab === 'broadcasts' && (
-          <div className="row g-4">
-            <div className="col-12 col-md-5">
-              <div className="card shadow-sm border-0">
-                <div className="card-header bg-white py-3">
-                  <h5 className="mb-0 fw-bold">Publish Official Broadcast</h5>
-                  <small className="text-muted">Pushes emergency alert / advisory to devotee devices</small>
+        {/* TAB 5: DEVOTEE REPORTS FEED */}
+        {activeTab === 'reports' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 lg:p-6 space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <h2 className="text-base font-bold text-white">Live Devotee Reports Feed</h2>
+                  <p className="text-xs text-slate-400">Crowd submissions by pilgrims waiting at counters</p>
                 </div>
-                <div className="card-body">
-                  <form onSubmit={handlePublishBroadcast}>
-                    <div className="mb-3">
-                      <label className="form-label fw-bold small">Alert Title</label>
-                      <input
-                        type="text"
-                        className="form-control"
-                        placeholder="e.g. Vishnu Nivasam Tokens Exhausted"
-                        value={broadcastTitle}
-                        onChange={(e) => setBroadcastTitle(e.target.value)}
-                        required
-                      />
-                    </div>
-
-                    <div className="mb-3">
-                      <label className="form-label fw-bold small">Alert Message</label>
-                      <textarea
-                        className="form-control"
-                        rows={3}
-                        placeholder="e.g. All SSD tokens for today are distributed. Next quota opens at 5:00 AM tomorrow."
-                        value={broadcastMessage}
-                        onChange={(e) => setBroadcastMessage(e.target.value)}
-                        required
-                      />
-                    </div>
-
-                    <div className="row g-2 mb-3">
-                      <div className="col-6">
-                        <label className="form-label fw-bold small">Severity</label>
-                        <select
-                          className="form-select"
-                          value={broadcastSeverity}
-                          onChange={(e) => setBroadcastSeverity(e.target.value as any)}
-                        >
-                          <option value="info">Info (Blue)</option>
-                          <option value="success">Success (Green)</option>
-                          <option value="warning">Warning (Yellow)</option>
-                          <option value="alert">Critical Alert (Red)</option>
-                        </select>
-                      </div>
-
-                      <div className="col-6">
-                        <label className="form-label fw-bold small">Target Location</label>
-                        <select
-                          className="form-select"
-                          value={broadcastTargetLoc}
-                          onChange={(e) => setBroadcastTargetLoc(e.target.value)}
-                        >
-                          <option value="all">All Locations</option>
-                          {locations.map((loc) => (
-                            <option key={loc.id} value={loc.id}>
-                              {loc.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    <button type="submit" className="btn btn-primary w-100 fw-bold">
-                      Publish Alert Now
-                    </button>
-                  </form>
-                </div>
+                <button
+                  onClick={handleResetAllReportsToday}
+                  className="px-3.5 py-2 rounded-xl bg-red-950/40 border border-red-900/60 hover:bg-red-900/50 text-red-300 text-xs font-bold flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Clear All Active Counts</span>
+                </button>
               </div>
-            </div>
 
-            <div className="col-12 col-md-7">
-              <div className="card shadow-sm border-0">
-                <div className="card-header bg-white py-3">
-                  <h5 className="mb-0 fw-bold">Active Broadcast Notices ({alerts.length})</h5>
+              {allReports.length === 0 ? (
+                <div className="py-12 text-center text-slate-500 text-xs">
+                  No pilgrim queue reports recorded yet today.
                 </div>
-                <div className="card-body p-0">
-                  {alerts.length === 0 ? (
-                    <div className="text-center py-4 text-muted">No active broadcasts.</div>
-                  ) : (
-                    <div className="list-group list-group-flush">
-                      {alerts.map((al) => (
-                        <div key={al.id} className="list-group-item d-flex justify-content-between align-items-start py-3">
-                          <div className="me-auto">
-                            <div className="d-flex align-items-center gap-2 mb-1">
-                              <span className={`badge ${
-                                al.severity === 'alert' ? 'bg-danger' :
-                                al.severity === 'warning' ? 'bg-warning text-dark' :
-                                al.severity === 'success' ? 'bg-success' : 'bg-info text-dark'
-                              }`}>
-                                {al.severity?.toUpperCase()}
-                              </span>
-                              <span className="fw-bold">{al.title}</span>
-                              <small className="text-muted">({al.timestamp})</small>
-                            </div>
-                            <div className="text-muted small">{al.message}</div>
-                          </div>
-                          <button
-                            className="btn btn-sm btn-outline-danger ms-2"
-                            onClick={() => handleDeleteAlert(al.id)}
-                            title="Remove broadcast"
-                          >
-                            ✕
-                          </button>
+              ) : (
+                <div className="space-y-2.5">
+                  {allReports.map((rep) => (
+                    <div
+                      key={rep.id}
+                      className="bg-slate-950 border border-slate-800/80 rounded-2xl p-3.5 flex items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-white text-sm">{rep.locationName || 'Tirupati Counter'}</span>
+                          <span className="px-2 py-0.5 rounded-md bg-blue-900/40 text-blue-300 font-semibold text-[10px]">
+                            {rep.lineName}
+                          </span>
+                          <span className="text-[11px] text-slate-500">{rep.timestamp}</span>
                         </div>
-                      ))}
+                        <p className="text-slate-400">
+                          Group Size: <strong className="text-slate-200">{rep.peopleCount} pilgrims</strong> · Status:{' '}
+                          <span className="text-emerald-400 font-semibold">{rep.status}</span>
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={() => handleDeleteReport(rep.id)}
+                        className="p-2 text-slate-500 hover:text-red-400 rounded-lg hover:bg-slate-900"
+                        title="Delete Report"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
-                  )}
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 6: SYSTEM MAINTENANCE */}
+        {activeTab === 'system' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 lg:p-6 space-y-6">
+              <div>
+                <h2 className="text-base font-bold text-white">System Maintenance & Daily Procedures</h2>
+                <p className="text-xs text-slate-400">Routine operations for supervisor staff at Tirupati counters</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Morning Reset */}
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5 space-y-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-900/30 text-blue-400 flex items-center justify-center">
+                    <Clock className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-sm">Morning Opening Preset</h3>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Sets all 3 counters as OPEN with standard 75% morning token allocation.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleApplyPreset('normal')}
+                    className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs"
+                  >
+                    Apply Opening Preset
+                  </button>
+                </div>
+
+                {/* Heavy Rush Preset */}
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5 space-y-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-900/30 text-amber-400 flex items-center justify-center">
+                    <Flame className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-sm">Heavy Rush Advisory</h3>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Marks queues as High Crowd with increased wait times and low chance warning.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleApplyPreset('rush')}
+                    className="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs"
+                  >
+                    Apply Rush Mode
+                  </button>
+                </div>
+
+                {/* Quota Exhausted / Evening Close */}
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl p-5 space-y-3">
+                  <div className="w-10 h-10 rounded-xl bg-red-900/30 text-red-400 flex items-center justify-center">
+                    <X className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-sm">Close Quotas & Counters</h3>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Marks all lines as closed and resets probabilities to 0% after quota completes.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleApplyPreset('closed')}
+                    className="w-full py-2.5 rounded-xl bg-red-950/60 hover:bg-red-900/80 border border-red-800 text-red-300 font-bold text-xs"
+                  >
+                    Close Counters for Today
+                  </button>
                 </div>
               </div>
             </div>
@@ -1204,284 +1259,92 @@ export const AdminPage: React.FC = () => {
         )}
       </div>
 
-      {/* ---------------------------------------------------------------------- */}
-      {/* MODAL: EDIT LINE DETAILS */}
-      {/* ---------------------------------------------------------------------- */}
-      {editLineModalQueue && (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} tabIndex={-1}>
-          <div className="modal-dialog modal-dialog-centered">
-            <div className="modal-content border-0 shadow">
-              <div className="modal-header bg-primary text-white">
-                <h5 className="modal-title fw-bold">Edit Line Parameters</h5>
+      {/* Modal: Add New Counter Location */}
+      {showAddLocationModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-white text-base">Add New SSD Counter Center</h3>
+              <button
+                onClick={() => setShowAddLocationModal(false)}
+                className="p-1 rounded-full text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateLocation} className="space-y-3 text-xs">
+              <div className="space-y-1">
+                <label className="font-bold text-slate-400">Center Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Alipiri Bhudevi Extension"
+                  value={newLocName}
+                  onChange={(e) => setNewLocName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-400">Landmark</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Near Alipiri Checkpost, Foot of Hills"
+                  value={newLocLandmark}
+                  onChange={(e) => setNewLocLandmark(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-400">Operating Hours</label>
+                <input
+                  type="text"
+                  placeholder="05:00 AM - 08:00 PM"
+                  value={newLocHours}
+                  onChange={(e) => setNewLocHours(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-400">Latitude</label>
+                  <input
+                    type="text"
+                    value={newLocLat}
+                    onChange={(e) => setNewLocLat(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white font-mono"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-400">Longitude</label>
+                  <input
+                    type="text"
+                    value={newLocLng}
+                    onChange={(e) => setNewLocLng(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-3">
                 <button
                   type="button"
-                  className="btn-close btn-close-white"
-                  onClick={() => setEditLineModalQueue(null)}
-                ></button>
-              </div>
-              <form onSubmit={handleSaveModalLine}>
-                <div className="modal-body">
-                  <div className="mb-3">
-                    <label className="form-label fw-bold small">Line Name</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={modalLineName}
-                      onChange={(e) => setModalLineName(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div className="mb-3">
-                    <label className="form-label fw-bold small">Token Slot Type</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      value={modalLineToken}
-                      onChange={(e) => setModalLineToken(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div className="row g-2 mb-3">
-                    <div className="col-6">
-                      <label className="form-label fw-bold small">Active Voting Number</label>
-                      <input
-                        type="number"
-                        min="0"
-                        className="form-control fw-bold text-primary"
-                        value={modalLineVotes}
-                        onChange={(e) => setModalLineVotes(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                        required
-                      />
-                      <small className="text-muted">Current base votes</small>
-                    </div>
-
-                    <div className="col-6">
-                      <label className="form-label fw-bold small">Estimated Chance (%)</label>
-                      <input
-                        type="number"
-                        min="5"
-                        max="99"
-                        className="form-control fw-bold"
-                        value={modalLineProb}
-                        onChange={(e) => setModalLineProb(parseInt(e.target.value, 10) || 80)}
-                        required
-                      />
-                      <small className="text-muted">Probability</small>
-                    </div>
-                  </div>
-
-                  <div className="row g-2 mb-3">
-                    <div className="col-6">
-                      <label className="form-label fw-bold small">Estimated Wait (Minutes)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="300"
-                        className="form-control"
-                        value={modalLineWait}
-                        onChange={(e) => setModalLineWait(parseInt(e.target.value, 10) || 15)}
-                        required
-                      />
-                    </div>
-
-                    <div className="col-6">
-                      <label className="form-label fw-bold small">Crowd Level</label>
-                      <select
-                        className="form-select"
-                        value={modalLineCrowd}
-                        onChange={(e) => setModalLineCrowd(e.target.value as CrowdLevel)}
-                      >
-                        <option value="Low">Low</option>
-                        <option value="Moderate">Moderate</option>
-                        <option value="High">High</option>
-                        <option value="Very High">Very High</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="form-check form-switch mt-3">
-                    <input
-                      className="form-check-input"
-                      type="checkbox"
-                      id="lineActiveCheck"
-                      checked={modalLineActive}
-                      onChange={(e) => setModalLineActive(e.target.checked)}
-                    />
-                    <label className="form-check-label fw-bold" htmlFor="lineActiveCheck">
-                      Line is Open and Accepting Devotees
-                    </label>
-                  </div>
-                </div>
-
-                <div className="modal-footer bg-light">
-                  <button
-                    type="button"
-                    className="btn btn-outline-secondary"
-                    onClick={() => setEditLineModalQueue(null)}
-                  >
-                    Cancel
-                  </button>
-                  <button type="submit" className="btn btn-primary fw-bold">
-                    Save Changes
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ---------------------------------------------------------------------- */}
-      {/* MODAL: ADD NEW LINE */}
-      {/* ---------------------------------------------------------------------- */}
-      {showAddLineModal && (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} tabIndex={-1}>
-          <div className="modal-dialog modal-dialog-centered">
-            <div className="modal-content border-0 shadow">
-              <div className="modal-header bg-dark text-white">
-                <h5 className="modal-title fw-bold">Add New Queue Line</h5>
+                  onClick={() => setShowAddLocationModal(false)}
+                  className="flex-1 py-3 rounded-xl border border-slate-700 text-slate-300 font-bold"
+                >
+                  Cancel
+                </button>
                 <button
-                  type="button"
-                  className="btn-close btn-close-white"
-                  onClick={() => setShowAddLineModal(false)}
-                ></button>
+                  type="submit"
+                  className="flex-1 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold shadow-md shadow-blue-600/30"
+                >
+                  Create Center
+                </button>
               </div>
-              <form onSubmit={handleAddNewLine}>
-                <div className="modal-body">
-                  <div className="mb-3">
-                    <label className="form-label fw-bold small">Line Name / Description</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      placeholder="e.g. Line 3 (Elderly & Divyangjan)"
-                      value={newLineName}
-                      onChange={(e) => setNewLineName(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div className="mb-3">
-                    <label className="form-label fw-bold small">Token Slot Category</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      placeholder="e.g. General SSD Token"
-                      value={newLineToken}
-                      onChange={(e) => setNewLineToken(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div className="mb-3">
-                    <label className="form-label fw-bold small">Initial Starting Voting Number</label>
-                    <input
-                      type="number"
-                      min="0"
-                      className="form-control fw-bold"
-                      value={newLineInitialVotes}
-                      onChange={(e) => setNewLineInitialVotes(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                    />
-                    <small className="text-muted">Subsequent votes from users will count upwards from this starting number.</small>
-                  </div>
-                </div>
-
-                <div className="modal-footer bg-light">
-                  <button
-                    type="button"
-                    className="btn btn-outline-secondary"
-                    onClick={() => setShowAddLineModal(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button type="submit" className="btn btn-primary fw-bold">
-                    Create Line
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ---------------------------------------------------------------------- */}
-      {/* MODAL: ADD NEW LOCATION */}
-      {/* ---------------------------------------------------------------------- */}
-      {showAddLocModal && (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} tabIndex={-1}>
-          <div className="modal-dialog modal-dialog-centered">
-            <div className="modal-content border-0 shadow">
-              <div className="modal-header bg-dark text-white">
-                <h5 className="modal-title fw-bold">Add New Counter Center</h5>
-                <button
-                  type="button"
-                  className="btn-close btn-close-white"
-                  onClick={() => setShowAddLocModal(false)}
-                ></button>
-              </div>
-              <form onSubmit={handleAddLocationSubmit}>
-                <div className="modal-body">
-                  <div className="mb-3">
-                    <label className="form-label fw-bold small">Center Name</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      placeholder="e.g. Govindaraja Swamy Choultries"
-                      value={newLocName}
-                      onChange={(e) => setNewLocName(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <div className="mb-3">
-                    <label className="form-label fw-bold small">Landmark / Proximity</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      placeholder="e.g. Near Tirupati Railway Station"
-                      value={newLocLandmark}
-                      onChange={(e) => setNewLocLandmark(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="mb-3">
-                    <label className="form-label fw-bold small">Short Address</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      placeholder="e.g. Opposite Bus Stand, Tirupati"
-                      value={newLocAddress}
-                      onChange={(e) => setNewLocAddress(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="mb-3">
-                    <label className="form-label fw-bold small">Operating Hours</label>
-                    <input
-                      type="text"
-                      className="form-control"
-                      placeholder="05:00 AM - 08:00 PM"
-                      value={newLocHours}
-                      onChange={(e) => setNewLocHours(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="modal-footer bg-light">
-                  <button
-                    type="button"
-                    className="btn btn-outline-secondary"
-                    onClick={() => setShowAddLocModal(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button type="submit" className="btn btn-primary fw-bold">
-                    Create Center
-                  </button>
-                </div>
-              </form>
-            </div>
+            </form>
           </div>
         </div>
       )}

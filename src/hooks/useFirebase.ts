@@ -1,22 +1,10 @@
 import { useState, useEffect } from 'react';
-import {
-  collection,
-  doc,
-  onSnapshot,
-  setDoc,
-  getDocs,
-  updateDoc,
-  increment,
-  deleteDoc,
-  getDoc,
-  query,
-  where,
-  runTransaction
-} from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc, getDocs, updateDoc, increment, deleteDoc, getDoc, query, where } from 'firebase/firestore';
 import { getToken, onMessage } from 'firebase/messaging';
 import { db, messagingPromise } from '../lib/firebase';
-import { CounterLocation, QueueAlert, UserQueueReport, DevoteeProfile, QueueLine, CrowdLevel, ProbabilityLevel } from '../types';
+import { CounterLocation, QueueAlert, UserQueueReport, DevoteeProfile } from '../types';
 import { DEFAULT_LOCATIONS, DEFAULT_ALERTS } from '../data/initialData';
+
 
 export enum OperationType {
   CREATE = 'create',
@@ -60,39 +48,6 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   return errInfo;
-}
-
-/**
- * Calculates dynamic wait time, crowd level, and probability level based on active voting counts.
- */
-export function calculateLineMetrics(votesCount: number, customProbability?: number) {
-  const safeVotes = Math.max(0, votesCount);
-  const estimatedWait = Math.min(180, Math.max(5, Math.floor(safeVotes * 3.2)));
-  
-  let prob: number;
-  if (customProbability !== undefined && customProbability >= 0 && customProbability <= 100) {
-    prob = customProbability;
-  } else {
-    // Dynamic calculation: probability scales realistically with vote count and wait time
-    prob = Math.max(8, Math.min(94, Math.floor(95 - (safeVotes * 2.8) - (estimatedWait * 0.15))));
-  }
-
-  let crowd: CrowdLevel = 'Low';
-  if (safeVotes >= 20) crowd = 'Very High';
-  else if (safeVotes >= 10) crowd = 'High';
-  else if (safeVotes >= 4) crowd = 'Moderate';
-
-  let probLevel: ProbabilityLevel = 'High';
-  if (prob < 35) probLevel = 'Low';
-  else if (prob < 60) probLevel = 'Medium';
-  else if (prob < 80) probLevel = 'Good';
-
-  return {
-    estimatedWaitMinutes: estimatedWait,
-    estimatedProbability: prob,
-    crowdLevel: crowd,
-    probabilityLevel: probLevel
-  };
 }
 
 export function useFirebase() {
@@ -264,7 +219,7 @@ export function useFirebase() {
         const data = d.data() as UserQueueReport;
         hist.push({ ...data, id: data.id || d.id });
       });
-      hist.sort((a,b) => b.id.localeCompare(a.id));
+      hist.sort((a,b) => b.id.localeCompare(a.id)); // simple sort by id which has Date.now
       setReportHistory(hist);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'reports');
@@ -276,6 +231,59 @@ export function useFirebase() {
     };
   }, [profile?.id]);
 
+  // Periodic update every 5 minutes to refresh queue stats based on votes decaying
+  useEffect(() => {
+    const refreshInterval = setInterval(async () => {
+      try {
+        const locationsRef = collection(db, 'locations');
+        const locSnap = await getDocs(locationsRef);
+        
+        locSnap.forEach(async (docSnap) => {
+          const loc = docSnap.data() as CounterLocation;
+          let hasChanges = false;
+          const newQueues = (loc.queues || []).map(q => {
+             const decayedReports15M = Math.max(0, q.reportsLast15Min - Math.max(1, Math.floor(q.reportsLast15Min * 0.2)));
+             const newActive = Math.max(0, q.activeReportsCount - Math.max(1, Math.floor(q.activeReportsCount * 0.1)));
+             const newLastUpdated = q.lastUpdatedMinutesAgo + 5;
+             
+             const estimatedWait = Math.min(180, Math.floor(newActive * 2.5));
+             const newProb = Math.max(5, Math.min(100, Math.floor(100 - (newActive * 1.5))));
+             
+             let crowd = 'Low';
+             if (newActive > 20) crowd = 'Moderate';
+             if (newActive > 50) crowd = 'High';
+             if (newActive > 100) crowd = 'Very High';
+
+             let probLevel = 'High';
+             if (newProb < 80) probLevel = 'Good';
+             if (newProb < 50) probLevel = 'Medium';
+             if (newProb < 30) probLevel = 'Low';
+
+             if (decayedReports15M !== q.reportsLast15Min || newLastUpdated !== q.lastUpdatedMinutesAgo) {
+               hasChanges = true;
+             }
+             return {
+               ...q,
+               activeReportsCount: newActive,
+               reportsLast15Min: decayedReports15M,
+               lastUpdatedMinutesAgo: newLastUpdated,
+               estimatedWaitMinutes: estimatedWait,
+               estimatedProbability: newProb,
+               crowdLevel: crowd as any,
+               probabilityLevel: probLevel as any,
+             }
+          });
+          if (hasChanges) {
+             await updateDoc(docSnap.ref, { queues: newQueues });
+          }
+        });
+      } catch (err) {
+        console.error("Failed to refresh stats", err);
+      }
+    }, 5 * 60 * 1000); // 5 minutes
+    return () => clearInterval(refreshInterval);
+  }, []);
+
   const updateProfile = async (updated: Partial<DevoteeProfile>) => {
     if (!profile) return;
     const profileRef = doc(db, 'profiles', profile.id);
@@ -286,16 +294,10 @@ export function useFirebase() {
     }
   };
 
-  /**
-   * DEVOTEE VOTING SUBMISSION:
-   * Uses an atomic Firestore transaction so user votes strictly count from whatever
-   * the current number is in Firestore (including any number just set by the admin).
-   * User voting will NEVER overwrite or reset admin-edited values.
-   */
-  const submitReport = async (locationId: string, queueId: string, peopleCount: number = 1, lat?: number, lng?: number) => {
+  const submitReport = async (locationId: string, queueId: string, peopleCount: number, lat?: number, lng?: number) => {
     let currentProfile = profile;
     if (!currentProfile) {
-      const localProfileId = localStorage.getItem('tq_profile_id') || ('usr_' + Math.random().toString(36).substring(2, 8));
+      let localProfileId = localStorage.getItem('tq_profile_id') || ('usr_' + Math.random().toString(36).substring(2, 8));
       localStorage.setItem('tq_profile_id', localProfileId);
       currentProfile = {
         id: localProfileId,
@@ -317,260 +319,89 @@ export function useFirebase() {
       }
     }
 
+    const loc = locations.find(l => l.id === locationId);
+    if (!loc) return;
+    const q = (loc.queues || []).find(qu => qu.id === queueId);
+    if (!q) return;
+
+    let verified = false;
+    let distMeter: number | undefined;
+    if (lat && lng) {
+      verified = true;
+    }
+
     const reportId = 'rep_' + Date.now();
-    const locRef = doc(db, 'locations', locationId);
+    const newReport: UserQueueReport = {
+      id: reportId,
+      userId: currentProfile.id,
+      locationId,
+      queueId,
+      locationName: loc.name,
+      lineName: q.name,
+      peopleCount,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      locationVerified: verified,
+      status: 'active'
+    };
+
+    if (distMeter !== undefined) {
+      newReport.distanceMeter = distMeter;
+    }
 
     try {
-      // Execute Firestore Transaction to atomically increment the queue line votes
-      await runTransaction(db, async (transaction) => {
-        const locSnap = await transaction.get(locRef);
-        if (!locSnap.exists()) {
-          throw new Error(`Location ${locationId} does not exist`);
-        }
+      // Save Active Report & Global Report
+      await setDoc(doc(db, 'active_reports', currentProfile.id), newReport);
+      await setDoc(doc(db, 'reports', reportId), newReport);
 
-        const locData = locSnap.data() as CounterLocation;
-        const existingQueues = locData.queues || [];
-        const targetQueue = existingQueues.find(q => q.id === queueId);
-
-        const currentVotes = Number(targetQueue?.activeReportsCount) || 0;
-        const newVotes = currentVotes + 1; // Devotee vote adds 1 directly onto the current/admin-edited base
-
-        const newReport: UserQueueReport = {
-          id: reportId,
-          userId: currentProfile.id,
-          locationId,
-          queueId,
-          locationName: locData.name,
-          lineName: targetQueue?.name || 'Queue Line',
-          peopleCount: Math.max(1, peopleCount),
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          locationVerified: Boolean(lat && lng),
-          status: 'active',
-          ...(lat && lng ? { distanceMeter: 50 } : {})
-        };
-
-        const updatedQueues = existingQueues.map(queue => {
-          if (queue.id === queueId) {
-            const newLast15Min = (Number(queue.reportsLast15Min) || 0) + 1;
-            const metrics = calculateLineMetrics(newVotes);
-
-            return {
-              ...queue,
-              activeReportsCount: newVotes,
-              reportsLast15Min: newLast15Min,
-              lastUpdatedMinutesAgo: 0,
-              ...metrics
-            };
-          }
-          return queue;
-        });
-
-        const totalReports = updatedQueues.reduce((acc, q) => acc + (q.activeReportsCount || 0), 0);
-        const best = updatedQueues.reduce(
-          (b, curr) => (curr.estimatedProbability > (b?.estimatedProbability || 0) ? curr : b),
-          updatedQueues[0]
-        );
-
-        // Update location document atomically
-        transaction.update(locRef, {
-          totalReportsCount: totalReports,
-          queues: updatedQueues,
-          bestLineId: best?.id || '',
-          bestLineNumber: best?.lineNumber || 1,
-          bestLineChance: best?.estimatedProbability || 0
-        });
-
-        // Save active and global reports
-        transaction.set(doc(db, 'active_reports', currentProfile.id), newReport);
-        transaction.set(doc(db, 'reports', reportId), newReport);
-      });
-
-      // Update user karma asynchronously
-      updateDoc(doc(db, 'profiles', currentProfile.id), {
-        karmaPoints: increment(lat && lng ? 30 : 20),
+      await updateDoc(doc(db, 'profiles', currentProfile.id), {
+        karmaPoints: increment(verified ? 30 : 20),
         reportsSubmitted: increment(1),
-        verifiedReportsCount: increment(lat && lng ? 1 : 0)
-      }).catch(console.warn);
+        verifiedReportsCount: increment(verified ? 1 : 0)
+      });
 
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `locations/${locationId}`);
-      throw err;
-    }
-  };
+      const locRef = doc(db, 'locations', loc.id);
+      const updatedQueues = (loc.queues || []).map(queue => {
+        if (queue.id === queueId) {
+          const newActiveReports = (queue.activeReportsCount || 0) + 1;
+          const newLast15Min = (queue.reportsLast15Min || 0) + 1;
+          
+          // Realistic dynamic wait time & probability calculation based on vote crowd count:
+          // Devotee group multiplier
+          const crowdScale = newActiveReports + (peopleCount > 1 ? Math.floor(peopleCount * 0.4) : 0);
+          const estimatedWait = Math.min(180, Math.max(5, Math.floor(crowdScale * 3.2)));
+          
+          // Probability decreases realistically as crowd queue reports rise (max 94%, min 8%)
+          const newProb = Math.max(8, Math.min(94, Math.floor(95 - (crowdScale * 2.8) - (estimatedWait * 0.15))));
+          
+          let crowd: 'Low' | 'Moderate' | 'High' | 'Very High' = 'Low';
+          if (crowdScale >= 20) crowd = 'Very High';
+          else if (crowdScale >= 10) crowd = 'High';
+          else if (crowdScale >= 4) crowd = 'Moderate';
 
-  /**
-   * ADMIN ACTION: Edit/Set Voting Number for a specific line.
-   * Atomically updates the voting count in Firestore so any subsequent user votes
-   * continue counting smoothly from this updated number.
-   */
-  const adminSetLineVotes = async (
-    locationId: string,
-    queueId: string,
-    newVoteCount: number,
-    customOptions?: {
-      name?: string;
-      tokenSlotType?: string;
-      isActive?: boolean;
-      estimatedProbability?: number;
-      estimatedWaitMinutes?: number;
-      crowdLevel?: CrowdLevel;
-      trend?: any;
-    }
-  ) => {
-    const locRef = doc(db, 'locations', locationId);
-    try {
-      await runTransaction(db, async (transaction) => {
-        const locSnap = await transaction.get(locRef);
-        if (!locSnap.exists()) {
-          throw new Error(`Location ${locationId} not found`);
+          let probLevel: 'High' | 'Good' | 'Medium' | 'Low' = 'High';
+          if (newProb < 35) probLevel = 'Low';
+          else if (newProb < 60) probLevel = 'Medium';
+          else if (newProb < 80) probLevel = 'Good';
+
+          return {
+            ...queue,
+            activeReportsCount: newActiveReports,
+            reportsLast15Min: newLast15Min,
+            estimatedWaitMinutes: estimatedWait,
+            estimatedProbability: newProb,
+            crowdLevel: crowd,
+            probabilityLevel: probLevel,
+            lastUpdatedMinutesAgo: 0
+          };
         }
-
-        const locData = locSnap.data() as CounterLocation;
-        const existingQueues = locData.queues || [];
-        const safeVotes = Math.max(0, Math.round(Number(newVoteCount) || 0));
-
-        const updatedQueues = existingQueues.map(queue => {
-          if (queue.id === queueId) {
-            const metrics = calculateLineMetrics(safeVotes, customOptions?.estimatedProbability);
-
-            return {
-              ...queue,
-              activeReportsCount: safeVotes,
-              lastUpdatedMinutesAgo: 0,
-              ...metrics,
-              ...(customOptions?.name ? { name: customOptions.name } : {}),
-              ...(customOptions?.tokenSlotType ? { tokenSlotType: customOptions.tokenSlotType } : {}),
-              ...(customOptions?.isActive !== undefined ? { isActive: customOptions.isActive } : {}),
-              ...(customOptions?.estimatedWaitMinutes !== undefined ? { estimatedWaitMinutes: customOptions.estimatedWaitMinutes } : {}),
-              ...(customOptions?.crowdLevel ? { crowdLevel: customOptions.crowdLevel } : {}),
-              ...(customOptions?.trend ? { trend: customOptions.trend } : {})
-            };
-          }
-          return queue;
-        });
-
-        const totalReports = updatedQueues.reduce((acc, q) => acc + (q.activeReportsCount || 0), 0);
-        const best = updatedQueues.reduce(
-          (b, curr) => (curr.estimatedProbability > (b?.estimatedProbability || 0) ? curr : b),
-          updatedQueues[0]
-        );
-
-        transaction.update(locRef, {
-          queues: updatedQueues,
-          totalReportsCount: totalReports,
-          bestLineId: best?.id || '',
-          bestLineNumber: best?.lineNumber || 1,
-          bestLineChance: best?.estimatedProbability || 0
-        });
+        return queue;
+      });
+      await updateDoc(locRef, {
+        totalReportsCount: increment(1),
+        queues: updatedQueues
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `locations/${locationId}`);
-      throw err;
-    }
-  };
-
-  /**
-   * ADMIN ACTION: Quick +/- delta adjust votes for a line (e.g., +1, +5, -1, -5).
-   */
-  const adminAdjustLineVotes = async (locationId: string, queueId: string, delta: number) => {
-    const locRef = doc(db, 'locations', locationId);
-    try {
-      await runTransaction(db, async (transaction) => {
-        const locSnap = await transaction.get(locRef);
-        if (!locSnap.exists()) return;
-
-        const locData = locSnap.data() as CounterLocation;
-        const existingQueues = locData.queues || [];
-        const targetQueue = existingQueues.find(q => q.id === queueId);
-        const currentVotes = Number(targetQueue?.activeReportsCount) || 0;
-        const safeVotes = Math.max(0, currentVotes + delta);
-
-        const updatedQueues = existingQueues.map(queue => {
-          if (queue.id === queueId) {
-            const metrics = calculateLineMetrics(safeVotes);
-            return {
-              ...queue,
-              activeReportsCount: safeVotes,
-              lastUpdatedMinutesAgo: 0,
-              ...metrics
-            };
-          }
-          return queue;
-        });
-
-        const totalReports = updatedQueues.reduce((acc, q) => acc + (q.activeReportsCount || 0), 0);
-        const best = updatedQueues.reduce(
-          (b, curr) => (curr.estimatedProbability > (b?.estimatedProbability || 0) ? curr : b),
-          updatedQueues[0]
-        );
-
-        transaction.update(locRef, {
-          queues: updatedQueues,
-          totalReportsCount: totalReports,
-          bestLineId: best?.id || '',
-          bestLineNumber: best?.lineNumber || 1,
-          bestLineChance: best?.estimatedProbability || 0
-        });
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `locations/${locationId}`);
-      throw err;
-    }
-  };
-
-  /**
-   * ADMIN ACTION: Batch update multiple lines for a counter location.
-   */
-  const adminBatchUpdateLines = async (
-    locationId: string,
-    updates: { id: string; activeReportsCount: number; estimatedProbability?: number; isActive?: boolean; name?: string; tokenSlotType?: string }[]
-  ) => {
-    const locRef = doc(db, 'locations', locationId);
-    try {
-      await runTransaction(db, async (transaction) => {
-        const locSnap = await transaction.get(locRef);
-        if (!locSnap.exists()) return;
-
-        const locData = locSnap.data() as CounterLocation;
-        const existingQueues = locData.queues || [];
-        const updateMap = new Map(updates.map(u => [u.id, u]));
-
-        const updatedQueues = existingQueues.map(queue => {
-          if (updateMap.has(queue.id)) {
-            const u = updateMap.get(queue.id)!;
-            const safeVotes = Math.max(0, Math.round(Number(u.activeReportsCount) || 0));
-            const metrics = calculateLineMetrics(safeVotes, u.estimatedProbability);
-
-            return {
-              ...queue,
-              name: u.name || queue.name,
-              tokenSlotType: u.tokenSlotType || queue.tokenSlotType,
-              isActive: u.isActive !== undefined ? u.isActive : queue.isActive,
-              activeReportsCount: safeVotes,
-              lastUpdatedMinutesAgo: 0,
-              ...metrics
-            };
-          }
-          return queue;
-        });
-
-        const totalReports = updatedQueues.reduce((acc, q) => acc + (q.activeReportsCount || 0), 0);
-        const best = updatedQueues.reduce(
-          (b, curr) => (curr.estimatedProbability > (b?.estimatedProbability || 0) ? curr : b),
-          updatedQueues[0]
-        );
-
-        transaction.update(locRef, {
-          queues: updatedQueues,
-          totalReportsCount: totalReports,
-          bestLineId: best?.id || '',
-          bestLineNumber: best?.lineNumber || 1,
-          bestLineChance: best?.estimatedProbability || 0
-        });
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `locations/${locationId}`);
-      throw err;
+      handleFirestoreError(err, OperationType.WRITE, `reports/${reportId}`);
     }
   };
 
@@ -618,6 +449,7 @@ export function useFirebase() {
   const requestNotificationPermission = async () => {
     if (!profile) return false;
     
+    // Check if Notification API is supported by the browser
     if (!('Notification' in window)) {
       console.warn('This browser does not support desktop notifications');
       return false;
@@ -628,8 +460,11 @@ export function useFirebase() {
       if (permission === 'granted') {
         const messaging = await messagingPromise;
         if (messaging) {
-          const currentToken = await getToken(messaging, {}).catch(e => {
-            console.warn('FCM token fetch failed:', e);
+          const currentToken = await getToken(messaging, { 
+            // We use default VAPID or let Firebase try if no key is provided.
+            // If the user hasn't provided a vapidKey in config, this might fail, but we'll try.
+          }).catch(e => {
+            console.warn('FCM token fetch failed. VAPID key might be missing:', e);
             return null;
           });
           if (currentToken) {
@@ -650,6 +485,9 @@ export function useFirebase() {
       if (!messaging) return;
       onMessage(messaging, (payload) => {
         console.log('Foreground message received:', payload);
+        // You could trigger a local toast/notification here if desired.
+        // For standard behavior, browser only shows push naturally in background,
+        // but we can optionally show it if they are in the app.
         if (payload.notification) {
           if ('Notification' in window && Notification.permission === 'granted') {
              new Notification(payload.notification.title || 'Queue Alert', {
@@ -670,14 +508,10 @@ export function useFirebase() {
     reportHistory,
     updateProfile,
     submitReport,
-    adminSetLineVotes,
-    adminAdjustLineVotes,
-    adminBatchUpdateLines,
     updatePresence,
     leaveQueue,
     markAlertRead,
     requestNotificationPermission
   };
 }
-
 

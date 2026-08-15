@@ -64,9 +64,6 @@ interface AppContextType {
   refreshData: () => void;
   requestNotificationPermission: () => Promise<boolean>;
   updateProfile: (updates: Partial<DevoteeProfile>) => void;
-  adminSetLineVotes: (locationId: string, queueId: string, newVoteCount: number, customOptions?: any) => Promise<void>;
-  adminAdjustLineVotes: (locationId: string, queueId: string, delta: number) => Promise<void>;
-  adminBatchUpdateLines: (locationId: string, updates: any[]) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -164,10 +161,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         showAdminLoginModal, setShowAdminLoginModal,
         submitReport, updatePresence, leaveQueue, markAlertRead, refreshData,
         requestNotificationPermission: firebase.requestNotificationPermission,
-        updateProfile: firebase.updateProfile,
-        adminSetLineVotes: firebase.adminSetLineVotes,
-        adminAdjustLineVotes: firebase.adminAdjustLineVotes,
-        adminBatchUpdateLines: firebase.adminBatchUpdateLines
+        updateProfile: firebase.updateProfile
       }}
     >
       {children}
