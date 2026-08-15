@@ -1,0 +1,40 @@
+--- src/hooks/useFirebase.ts
++++ src/hooks/useFirebase.ts
+@@ -188,6 +188,38 @@
+     };
+   }, [profile?.id]);
+ 
++  // Periodic update every 5 minutes to refresh queue stats based on votes
++  useEffect(() => {
++    const refreshInterval = setInterval(async () => {
++      try {
++        // We fetch all locations and all reports, and calculate new stats based on recent reports
++        const locationsRef = collection(db, 'locations');
++        const locSnap = await getDocs(locationsRef);
++        
++        locSnap.forEach(async (docSnap) => {
++          const loc = docSnap.data() as CounterLocation;
++          let hasChanges = false;
++          const newQueues = loc.queues.map(q => {
++             // Just simulate decaying the last updated minutes and reports for prototype
++             const decayedReports = Math.max(0, q.reportsLast15Min - Math.floor(Math.random() * 2));
++             const newLastUpdated = q.lastUpdatedMinutesAgo + 5;
++             hasChanges = true;
++             return {
++               ...q,
++               reportsLast15Min: decayedReports,
++               lastUpdatedMinutesAgo: newLastUpdated
++             }
++          });
++          if (hasChanges) {
++             await updateDoc(docSnap.ref, { queues: newQueues });
++          }
++        });
++      } catch (err) {
++        console.error("Failed to refresh stats", err);
++      }
++    }, 5 * 60 * 1000); // 5 minutes
++    return () => clearInterval(refreshInterval);
++  }, []);
++
+   const updateProfile = async (updated: Partial<DevoteeProfile>) => {

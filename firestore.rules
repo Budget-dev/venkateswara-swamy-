@@ -1,0 +1,35 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Counter Locations and Slotted Queues
+    match /locations/{locationId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    // Devotee Queue & Crowd Reports
+    match /reports/{reportId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    // Active Devotee Presence & Live Reports
+    match /active_reports/{userId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    // Official Admin & TTD Live Broadcasts
+    match /broadcasts/{broadcastId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    // Pilgrim & Guest Profiles
+    match /profiles/{userId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    // Global fallback for applet documents
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
+
